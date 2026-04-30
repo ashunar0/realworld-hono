@@ -33,14 +33,44 @@ export const articles = sqliteTable("articles", {
     .default(sql`(datetime('now'))`),
 });
 
+export const comments = sqliteTable("comments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  body: text("body").notNull(),
+  articleId: integer("article_id")
+    .notNull()
+    .references(() => articles.id),
+  authorId: integer("author_id")
+    .notNull()
+    .references(() => users.id),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   articles: many(articles),
+  comments: many(comments),
 }));
 
-export const articlesRelations = relations(articles, ({ one }) => ({
+export const articlesRelations = relations(articles, ({ one, many }) => ({
   author: one(users, {
     fields: [articles.authorId],
     references: [users.id],
+  }),
+  comments: many(comments),
+}));
+
+export const commentsRelations = relations(comments, ({ one }) => ({
+  author: one(users, {
+    fields: [comments.authorId],
+    references: [users.id],
+  }),
+  article: one(articles, {
+    fields: [comments.articleId],
+    references: [articles.id],
   }),
 }));
 
@@ -49,3 +79,6 @@ export type NewUser = typeof users.$inferInsert;
 
 export type Article = typeof articles.$inferSelect;
 export type NewArticle = typeof articles.$inferInsert;
+
+export type Comment = typeof comments.$inferSelect;
+export type NewComment = typeof comments.$inferInsert;
