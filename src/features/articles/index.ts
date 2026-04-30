@@ -13,6 +13,7 @@ import { authMiddleware, type AuthVariables } from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
 import { generateSlug } from "../../lib/slug";
 import { toArticleJson } from "../../lib/article";
+import comments from "./comments";
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -169,5 +170,8 @@ app.post(
     } satisfies ArticleResponse);
   },
 );
+
+// コメント sub-app をネストマウント
+app.route("/articles/:slug/comments", comments);
 
 export default app;
