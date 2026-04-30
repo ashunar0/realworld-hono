@@ -8,6 +8,13 @@
       "when": 1777534358785,
       "tag": "0000_dapper_gideon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1777536230799,
+      "tag": "0001_clammy_siren",
+      "breakpoints": true
     }
   ]
 }
