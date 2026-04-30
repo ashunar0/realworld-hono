@@ -31,14 +31,6 @@ export const updateUserSchema = z.object({
 
 export type UpdateUserRequest = z.infer<typeof updateUserSchema>;
 
-export type UserRow = {
-  id: number;
-  username: string;
-  email: string;
-  bio: string | null;
-  image: string | null;
-};
-
 export type AuthUserResponse = {
   user: {
     email: string;

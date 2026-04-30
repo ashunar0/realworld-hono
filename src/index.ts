@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { zValidator } from "@hono/zod-validator";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
+import { users } from "./db/schema";
 import {
   createUserSchema,
   loginUserSchema,
   updateUserSchema,
   type AuthUserResponse,
-  type UserRow,
 } from "./schemas/user";
 import { authMiddleware, type AuthVariables } from "./middleware/auth";
 
@@ -32,13 +33,11 @@ app.post(
     const { username, email, password } = c.req.valid("json").user;
     const passwordHash = await Bun.password.hash(password);
 
-    const row = db
-      .query(
-        `INSERT INTO users (username, email, password_hash)
-         VALUES (?, ?, ?)
-         RETURNING id, username, email, bio, image`,
-      )
-      .get(username, email, passwordHash) as UserRow;
+    const [row] = await db
+      .insert(users)
+      .values({ username, email, passwordHash })
+      .returning();
+    if (!row) throw new Error("failed to insert user");
 
     const token = await sign(
       {
@@ -78,16 +77,10 @@ app.post(
     const fail = () =>
       c.json({ errors: { body: ["email or password is invalid"] } }, 422);
 
-    const row = db
-      .query(
-        `SELECT id, username, email, password_hash, bio, image
-         FROM users
-         WHERE email = ?`,
-      )
-      .get(email) as (UserRow & { password_hash: string }) | undefined;
+    const [row] = await db.select().from(users).where(eq(users.email, email));
     if (!row) return fail();
 
-    const ok = await Bun.password.verify(password, row.password_hash);
+    const ok = await Bun.password.verify(password, row.passwordHash);
     if (!ok) return fail();
 
     const token = await sign(
@@ -115,9 +108,7 @@ app.post(
 app.get("/api/user", authMiddleware, async (c) => {
   const userId = c.get("userId");
 
-  const row = db
-    .query("SELECT id, username, email, bio, image FROM users WHERE id = ?")
-    .get(userId) as UserRow | undefined;
+  const [row] = await db.select().from(users).where(eq(users.id, userId));
   if (!row) return c.json({ errors: { body: ["user not found"] } }, 404);
 
   const token = await sign(
@@ -156,40 +147,22 @@ app.put(
     const userId = c.get("userId");
     const { user } = c.req.valid("json");
 
-    const updates: string[] = [];
-    const values: (string | number | null)[] = [];
+    const passwordHash = user.password !== undefined
+      ? await Bun.password.hash(user.password)
+      : undefined;
 
-    if (user.email !== undefined) {
-      updates.push("email = ?");
-      values.push(user.email);
-    }
-    if (user.username !== undefined) {
-      updates.push("username = ?");
-      values.push(user.username);
-    }
-    if (user.password !== undefined) {
-      updates.push("password_hash = ?");
-      values.push(await Bun.password.hash(user.password));
-    }
-    if (user.bio !== undefined) {
-      updates.push("bio = ?");
-      values.push(user.bio);
-    }
-    if (user.image !== undefined) {
-      updates.push("image = ?");
-      values.push(user.image);
-    }
-
-    updates.push("updated_at = datetime('now')");
-    values.push(userId);
-
-    const row = db
-      .query(
-        `UPDATE users SET ${updates.join(", ")}
-         WHERE id = ?
-         RETURNING id, username, email, bio, image`,
-      )
-      .get(...values) as UserRow | undefined;
+    const [row] = await db
+      .update(users)
+      .set({
+        ...(user.email !== undefined && { email: user.email }),
+        ...(user.username !== undefined && { username: user.username }),
+        ...(passwordHash !== undefined && { passwordHash }),
+        ...(user.bio !== undefined && { bio: user.bio }),
+        ...(user.image !== undefined && { image: user.image }),
+        updatedAt: sql`(datetime('now'))`,
+      })
+      .where(eq(users.id, userId))
+      .returning();
 
     if (!row) return c.json({ errors: { body: ["user not found"] } }, 404);
 
