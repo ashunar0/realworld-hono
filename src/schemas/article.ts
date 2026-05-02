@@ -2,9 +2,9 @@ import { z } from "zod";
 
 export const createArticleSchema = z.object({
   article: z.object({
-    title: z.string().min(1, "can't be empty"),
-    description: z.string().min(1, "can't be empty"),
-    body: z.string().min(1, "can't be empty"),
+    title: z.string().trim().min(1, "can't be empty"),
+    description: z.string().trim().min(1, "can't be empty"),
+    body: z.string().trim().min(1, "can't be empty"),
     tagList: z.array(z.string()).optional(),
   }),
 });
@@ -13,9 +13,9 @@ export type CreateArticleRequest = z.infer<typeof createArticleSchema>;
 
 export const updateArticleSchema = z.object({
   article: z.object({
-    title: z.string().min(1, "can't be empty").optional(),
-    description: z.string().min(1, "can't be empty").optional(),
-    body: z.string().min(1, "can't be empty").optional(),
+    title: z.string().trim().min(1, "can't be empty").optional(),
+    description: z.string().trim().min(1, "can't be empty").optional(),
+    body: z.string().trim().min(1, "can't be empty").optional(),
     tagList: z.array(z.string()).optional(),
   }),
 });

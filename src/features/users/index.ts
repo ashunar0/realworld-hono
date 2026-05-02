@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../../db";
 import { users } from "../../db/schema";
 import {
@@ -16,6 +16,20 @@ const app = new Hono<{ Variables: AuthVariables }>()
   // 新規登録 POST /api/users
   .post("/users", validateJson(createUserSchema), async (c) => {
     const { username, email, password } = c.req.valid("json").user;
+
+    const existingByEmail = await db.query.users.findFirst({
+      where: eq(users.email, email),
+    });
+    if (existingByEmail) {
+      return c.json({ errors: { body: ["email already taken"] } }, 422);
+    }
+    const existingByUsername = await db.query.users.findFirst({
+      where: eq(users.username, username),
+    });
+    if (existingByUsername) {
+      return c.json({ errors: { body: ["username already taken"] } }, 422);
+    }
+
     const passwordHash = await Bun.password.hash(password);
 
     const [row] = await db
@@ -88,6 +102,23 @@ const app = new Hono<{ Variables: AuthVariables }>()
     async (c) => {
       const userId = c.get("userId");
       const { user } = c.req.valid("json");
+
+      if (user.email !== undefined) {
+        const conflict = await db.query.users.findFirst({
+          where: and(eq(users.email, user.email), ne(users.id, userId)),
+        });
+        if (conflict) {
+          return c.json({ errors: { body: ["email already taken"] } }, 422);
+        }
+      }
+      if (user.username !== undefined) {
+        const conflict = await db.query.users.findFirst({
+          where: and(eq(users.username, user.username), ne(users.id, userId)),
+        });
+        if (conflict) {
+          return c.json({ errors: { body: ["username already taken"] } }, 422);
+        }
+      }
 
       const passwordHash = user.password !== undefined
         ? await Bun.password.hash(user.password)
