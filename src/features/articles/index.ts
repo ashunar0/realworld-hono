@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import {
   articleTags,
@@ -24,7 +24,7 @@ import {
 } from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
 import { generateSlug } from "../../lib/slug";
-import { toArticleJson } from "../../lib/article";
+import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
 
 const app = new Hono<{ Variables: AuthVariables }>()
@@ -121,7 +121,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         },
         limit,
         offset,
-        orderBy: desc(articles.createdAt),
+        orderBy: [desc(articles.createdAt), desc(articles.id)],
       });
 
       const [totalRow] = await db
@@ -131,7 +131,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
       return c.json({
         articles: list.map((a) =>
-          toArticleJson(
+          toArticleListJson(
             a,
             a.author,
             a.articleTags.map((at) => at.tag.name),
@@ -178,7 +178,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         },
         limit,
         offset,
-        orderBy: desc(articles.createdAt),
+        orderBy: [desc(articles.createdAt), desc(articles.id)],
       });
 
       const [totalRow] = await db
@@ -188,7 +188,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
       return c.json({
         articles: list.map((a) =>
-          toArticleJson(
+          toArticleListJson(
             a,
             a.author,
             a.articleTags.map((at) => at.tag.name),
@@ -219,10 +219,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
         },
       });
       if (!existing) {
-        return c.json({ errors: { body: ["article not found"] } }, 404);
+        return c.json({ errors: { article: ["not found"] } }, 404);
       }
       if (existing.authorId !== userId) {
-        return c.json({ errors: { body: ["forbidden"] } }, 403);
+        return c.json({ errors: { article: ["forbidden"] } }, 403);
       }
 
       const [updated] = await db
@@ -233,7 +233,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
             description: input.description,
           }),
           ...(input.body !== undefined && { body: input.body }),
-          updatedAt: sql`(datetime('now'))`,
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(articles.id, existing.id))
         .returning();
@@ -284,10 +284,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
       .from(articles)
       .where(eq(articles.slug, slug));
     if (!existing) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
     if (existing.authorId !== userId) {
-      return c.json({ errors: { body: ["forbidden"] } }, 403);
+      return c.json({ errors: { article: ["forbidden"] } }, 403);
     }
 
     await db.delete(articles).where(eq(articles.id, existing.id));
@@ -307,7 +307,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       },
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
     const [countRow] = await db
@@ -353,6 +353,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const slug = generateSlug(input.title);
       const tagList = [...new Set(input.tagList ?? [])];
 
+      const now = new Date().toISOString();
       const [created] = await db
         .insert(articles)
         .values({
@@ -361,6 +362,8 @@ const app = new Hono<{ Variables: AuthVariables }>()
           description: input.description,
           body: input.body,
           authorId: userId,
+          createdAt: now,
+          updatedAt: now,
         })
         .returning();
       if (!created) throw new Error("failed to create article");
@@ -389,9 +392,12 @@ const app = new Hono<{ Variables: AuthVariables }>()
         .where(eq(users.id, userId));
       if (!author) throw new Error("author not found");
 
-      return c.json({
-        article: toArticleJson(created, author, tagList),
-      } satisfies ArticleResponse);
+      return c.json(
+        {
+          article: toArticleJson(created, author, tagList),
+        } satisfies ArticleResponse,
+        201,
+      );
     },
   )
   // 記事 favorite POST /api/articles/:slug/favorite
@@ -407,7 +413,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       },
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
     await db
@@ -444,7 +450,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       },
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
     await db

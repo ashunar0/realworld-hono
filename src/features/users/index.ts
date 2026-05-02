@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "../../db";
 import { users } from "../../db/schema";
 import {
@@ -12,6 +12,10 @@ import { authMiddleware, type AuthVariables } from "../../middleware/auth";
 import { validateJson } from "../../middleware/validator";
 import { signToken } from "../../lib/jwt";
 
+const normalizeNullable = (
+  v: string | null | undefined,
+): string | null | undefined => (v === "" ? null : v);
+
 const app = new Hono<{ Variables: AuthVariables }>()
   // 新規登録 POST /api/users
   .post("/users", validateJson(createUserSchema), async (c) => {
@@ -21,41 +25,51 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(users.email, email),
     });
     if (existingByEmail) {
-      return c.json({ errors: { body: ["email already taken"] } }, 422);
+      return c.json(
+        { errors: { email: ["has already been taken"] } },
+        409,
+      );
     }
     const existingByUsername = await db.query.users.findFirst({
       where: eq(users.username, username),
     });
     if (existingByUsername) {
-      return c.json({ errors: { body: ["username already taken"] } }, 422);
+      return c.json(
+        { errors: { username: ["has already been taken"] } },
+        409,
+      );
     }
 
     const passwordHash = await Bun.password.hash(password);
 
+    const now = new Date().toISOString();
     const [row] = await db
       .insert(users)
-      .values({ username, email, passwordHash })
+      .values({ username, email, passwordHash, createdAt: now, updatedAt: now })
       .returning();
     if (!row) throw new Error("failed to insert user");
 
     const token = await signToken(row.id);
 
-    return c.json({
-      user: {
-        email: row.email,
-        token,
-        username: row.username,
-        bio: row.bio,
-        image: row.image,
-      },
-    } satisfies AuthUserResponse);
+    return c.json(
+      {
+        user: {
+          email: row.email,
+          token,
+          username: row.username,
+          bio: row.bio,
+          image: row.image,
+        },
+      } satisfies AuthUserResponse,
+      201,
+    );
   })
   // ログイン POST /api/users/login
   .post("/users/login", validateJson(loginUserSchema), async (c) => {
     const { email, password } = c.req.valid("json").user;
 
     const fail = () =>
-      c.json({ errors: { body: ["email or password is invalid"] } }, 422);
+      c.json({ errors: { credentials: ["invalid"] } }, 401);
 
     const [row] = await db.select().from(users).where(eq(users.email, email));
     if (!row) return fail();
@@ -80,7 +94,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
 
     const [row] = await db.select().from(users).where(eq(users.id, userId));
-    if (!row) return c.json({ errors: { body: ["user not found"] } }, 404);
+    if (!row) return c.json({ errors: { user: ["not found"] } }, 404);
 
     const token = await signToken(row.id);
 
@@ -108,7 +122,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
           where: and(eq(users.email, user.email), ne(users.id, userId)),
         });
         if (conflict) {
-          return c.json({ errors: { body: ["email already taken"] } }, 422);
+          return c.json(
+            { errors: { email: ["has already been taken"] } },
+            409,
+          );
         }
       }
       if (user.username !== undefined) {
@@ -116,7 +133,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
           where: and(eq(users.username, user.username), ne(users.id, userId)),
         });
         if (conflict) {
-          return c.json({ errors: { body: ["username already taken"] } }, 422);
+          return c.json(
+            { errors: { username: ["has already been taken"] } },
+            409,
+          );
         }
       }
 
@@ -124,20 +144,23 @@ const app = new Hono<{ Variables: AuthVariables }>()
         ? await Bun.password.hash(user.password)
         : undefined;
 
+      const bio = normalizeNullable(user.bio);
+      const image = normalizeNullable(user.image);
+
       const [row] = await db
         .update(users)
         .set({
           ...(user.email !== undefined && { email: user.email }),
           ...(user.username !== undefined && { username: user.username }),
           ...(passwordHash !== undefined && { passwordHash }),
-          ...(user.bio !== undefined && { bio: user.bio }),
-          ...(user.image !== undefined && { image: user.image }),
-          updatedAt: sql`(datetime('now'))`,
+          ...(user.bio !== undefined && { bio }),
+          ...(user.image !== undefined && { image }),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(users.id, userId))
         .returning();
 
-      if (!row) return c.json({ errors: { body: ["user not found"] } }, 404);
+      if (!row) return c.json({ errors: { user: ["not found"] } }, 404);
 
       const token = await signToken(row.id);
 

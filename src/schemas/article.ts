@@ -2,9 +2,9 @@ import { z } from "zod";
 
 export const createArticleSchema = z.object({
   article: z.object({
-    title: z.string().trim().min(1, "can't be empty"),
-    description: z.string().trim().min(1, "can't be empty"),
-    body: z.string().trim().min(1, "can't be empty"),
+    title: z.string().trim().min(1, "can't be blank"),
+    description: z.string().trim().min(1, "can't be blank"),
+    body: z.string().trim().min(1, "can't be blank"),
     tagList: z.array(z.string()).optional(),
   }),
 });
@@ -13,9 +13,9 @@ export type CreateArticleRequest = z.infer<typeof createArticleSchema>;
 
 export const updateArticleSchema = z.object({
   article: z.object({
-    title: z.string().trim().min(1, "can't be empty").optional(),
-    description: z.string().trim().min(1, "can't be empty").optional(),
-    body: z.string().trim().min(1, "can't be empty").optional(),
+    title: z.string().trim().min(1, "can't be blank").optional(),
+    description: z.string().trim().min(1, "can't be blank").optional(),
+    body: z.string().trim().min(1, "can't be blank").optional(),
     tagList: z.array(z.string()).optional(),
   }),
 });
@@ -59,7 +59,9 @@ export type ArticleResponse = {
   };
 };
 
+export type ArticleListItem = Omit<ArticleResponse["article"], "body">;
+
 export type ArticlesResponse = {
-  articles: ArticleResponse["article"][];
+  articles: ArticleListItem[];
   articlesCount: number;
 };

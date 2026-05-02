@@ -21,7 +21,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(users.username, username),
     });
     if (!target) {
-      return c.json({ errors: { body: ["profile not found"] } }, 404);
+      return c.json({ errors: { profile: ["not found"] } }, 404);
     }
 
     let following = false;
@@ -51,10 +51,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(users.username, username),
     });
     if (!target) {
-      return c.json({ errors: { body: ["profile not found"] } }, 404);
+      return c.json({ errors: { profile: ["not found"] } }, 404);
     }
     if (userId === target.id) {
-      return c.json({ errors: { body: ["cannot follow yourself"] } }, 422);
+      return c.json({ errors: { profile: ["cannot follow yourself"] } }, 422);
     }
 
     await db
@@ -75,7 +75,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(users.username, username),
     });
     if (!target) {
-      return c.json({ errors: { body: ["profile not found"] } }, 404);
+      return c.json({ errors: { profile: ["not found"] } }, 404);
     }
 
     await db

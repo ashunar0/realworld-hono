@@ -23,15 +23,18 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(articles.slug, slug),
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
+    const now = new Date().toISOString();
     const [created] = await db
       .insert(comments)
       .values({
         body: input.body,
         articleId: article.id,
         authorId: userId,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
     if (!created) throw new Error("failed to create comment");
@@ -42,9 +45,12 @@ const app = new Hono<{ Variables: AuthVariables }>()
     });
     if (!createdWithAuthor) throw new Error("comment not found after create");
 
-    return c.json({
-      comment: toCommentJson(createdWithAuthor, createdWithAuthor.author),
-    } satisfies CommentResponse);
+    return c.json(
+      {
+        comment: toCommentJson(createdWithAuthor, createdWithAuthor.author),
+      } satisfies CommentResponse,
+      201,
+    );
   })
   // コメント一覧 GET /api/articles/:slug/comments
   .get("/", async (c) => {
@@ -54,13 +60,13 @@ const app = new Hono<{ Variables: AuthVariables }>()
       where: eq(articles.slug, slug),
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
     const list = await db.query.comments.findMany({
       where: eq(comments.articleId, article.id),
       with: { author: true },
-      orderBy: desc(comments.createdAt),
+      orderBy: [desc(comments.createdAt), desc(comments.id)],
     });
 
     return c.json({
@@ -74,14 +80,14 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const idParam = c.req.param("id");
     const commentId = Number(idParam);
     if (!Number.isInteger(commentId)) {
-      return c.json({ errors: { body: ["invalid comment id"] } }, 422);
+      return c.json({ errors: { id: ["invalid"] } }, 422);
     }
 
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
     });
     if (!article) {
-      return c.json({ errors: { body: ["article not found"] } }, 404);
+      return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
     const [existing] = await db
@@ -89,15 +95,15 @@ const app = new Hono<{ Variables: AuthVariables }>()
       .from(comments)
       .where(eq(comments.id, commentId));
     if (!existing) {
-      return c.json({ errors: { body: ["comment not found"] } }, 404);
+      return c.json({ errors: { comment: ["not found"] } }, 404);
     }
 
     if (existing.articleId !== article.id) {
-      return c.json({ errors: { body: ["comment not found"] } }, 404);
+      return c.json({ errors: { comment: ["not found"] } }, 404);
     }
 
     if (existing.authorId !== userId) {
-      return c.json({ errors: { body: ["forbidden"] } }, 403);
+      return c.json({ errors: { comment: ["forbidden"] } }, 403);
     }
 
     await db.delete(comments).where(eq(comments.id, existing.id));

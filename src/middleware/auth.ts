@@ -7,7 +7,7 @@ export type AuthVariables = {
   userId: number;
 };
 
-const UNAUTHORIZED = { errors: { body: ["unauthorized"] } };
+const UNAUTHORIZED = { errors: { token: ["is missing"] } };
 
 export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
   async (c, next) => {

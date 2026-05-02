@@ -2,9 +2,16 @@ import { z } from "zod";
 
 export const createUserSchema = z.object({
   user: z.object({
-    username: z.string().trim().min(1, "can't be empty"),
-    email: z.string().trim().email("must be a valid email"),
-    password: z.string().min(8, "must be at least 8 characters"),
+    username: z.string().trim().min(1, "can't be blank"),
+    email: z
+      .string()
+      .trim()
+      .min(1, "can't be blank")
+      .email("must be a valid email"),
+    password: z
+      .string()
+      .min(1, "can't be blank")
+      .min(8, "must be at least 8 characters"),
   }),
 });
 
@@ -12,8 +19,12 @@ export type CreateUserRequest = z.infer<typeof createUserSchema>;
 
 export const loginUserSchema = z.object({
   user: z.object({
-    email: z.string().trim().email("must be a valid email"),
-    password: z.string().min(1, "can't be empty"),
+    email: z
+      .string()
+      .trim()
+      .min(1, "can't be blank")
+      .email("must be a valid email"),
+    password: z.string().min(1, "can't be blank"),
   }),
 });
 
@@ -21,9 +32,18 @@ export type LoginUserRequest = z.infer<typeof loginUserSchema>;
 
 export const updateUserSchema = z.object({
   user: z.object({
-    email: z.string().trim().email("must be a valid email").optional(),
-    username: z.string().trim().min(1, "can't be empty").optional(),
-    password: z.string().min(8, "must be at least 8 characters").optional(),
+    email: z
+      .string()
+      .trim()
+      .min(1, "can't be blank")
+      .email("must be a valid email")
+      .optional(),
+    username: z.string().trim().min(1, "can't be blank").optional(),
+    password: z
+      .string()
+      .min(1, "can't be blank")
+      .min(8, "must be at least 8 characters")
+      .optional(),
     bio: z.string().nullable().optional(),
     image: z.string().nullable().optional(),
   }),
