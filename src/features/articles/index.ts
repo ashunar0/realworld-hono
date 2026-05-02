@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { articles, users } from "../../db/schema";
+import { articleTags, articles, tags, users } from "../../db/schema";
 import {
   articlesQuerySchema,
   createArticleSchema,
@@ -18,7 +18,7 @@ import comments from "./comments";
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
   .get("/articles", validateQuery(articlesQuerySchema), async (c) => {
-    const { limit, offset, author } = c.req.valid("query");
+    const { limit, offset, author, tag } = c.req.valid("query");
 
     const conditions = [];
     if (author !== undefined) {
@@ -35,11 +35,43 @@ const app = new Hono<{ Variables: AuthVariables }>()
       conditions.push(eq(articles.authorId, u.id));
     }
 
+    if (tag !== undefined) {
+      const [t] = await db
+        .select({ id: tags.id })
+        .from(tags)
+        .where(eq(tags.name, tag));
+      if (!t) {
+        return c.json({
+          articles: [],
+          articlesCount: 0,
+        } satisfies ArticlesResponse);
+      }
+      const ats = await db
+        .select({ articleId: articleTags.articleId })
+        .from(articleTags)
+        .where(eq(articleTags.tagId, t.id));
+      if (ats.length === 0) {
+        return c.json({
+          articles: [],
+          articlesCount: 0,
+        } satisfies ArticlesResponse);
+      }
+      conditions.push(
+        inArray(
+          articles.id,
+          ats.map((at) => at.articleId),
+        ),
+      );
+    }
+
     const whereClause = conditions.length ? and(...conditions) : undefined;
 
     const list = await db.query.articles.findMany({
       where: whereClause,
-      with: { author: true },
+      with: {
+        author: true,
+        articleTags: { with: { tag: true } },
+      },
       limit,
       offset,
       orderBy: desc(articles.createdAt),
@@ -51,7 +83,9 @@ const app = new Hono<{ Variables: AuthVariables }>()
       .where(whereClause);
 
     return c.json({
-      articles: list.map((a) => toArticleJson(a, a.author)),
+      articles: list.map((a) =>
+        toArticleJson(a, a.author, a.articleTags.map((at) => at.tag.name)),
+      ),
       articlesCount: totalRow?.total ?? 0,
     } satisfies ArticlesResponse);
   })
@@ -67,7 +101,10 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
       const existing = await db.query.articles.findFirst({
         where: eq(articles.slug, slug),
-        with: { author: true },
+        with: {
+          author: true,
+          articleTags: { with: { tag: true } },
+        },
       });
       if (!existing) {
         return c.json({ errors: { body: ["article not found"] } }, 404);
@@ -90,8 +127,38 @@ const app = new Hono<{ Variables: AuthVariables }>()
         .returning();
       if (!updated) throw new Error("failed to update article");
 
+      let resultTagList: string[];
+      if (input.tagList !== undefined) {
+        const tagList = [...new Set(input.tagList)];
+
+        await db
+          .delete(articleTags)
+          .where(eq(articleTags.articleId, existing.id));
+
+        if (tagList.length > 0) {
+          await db
+            .insert(tags)
+            .values(tagList.map((name) => ({ name })))
+            .onConflictDoNothing();
+
+          const tagRows = await db
+            .select()
+            .from(tags)
+            .where(inArray(tags.name, tagList));
+
+          await db
+            .insert(articleTags)
+            .values(
+              tagRows.map((t) => ({ articleId: existing.id, tagId: t.id })),
+            );
+        }
+        resultTagList = tagList;
+      } else {
+        resultTagList = existing.articleTags.map((at) => at.tag.name);
+      }
+
       return c.json({
-        article: toArticleJson(updated, existing.author),
+        article: toArticleJson(updated, existing.author, resultTagList),
       } satisfies ArticleResponse);
     },
   )
@@ -121,14 +188,21 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
-      with: { author: true },
+      with: {
+        author: true,
+        articleTags: { with: { tag: true } },
+      },
     });
     if (!article) {
       return c.json({ errors: { body: ["article not found"] } }, 404);
     }
 
     return c.json({
-      article: toArticleJson(article, article.author),
+      article: toArticleJson(
+        article,
+        article.author,
+        article.articleTags.map((at) => at.tag.name),
+      ),
     } satisfies ArticleResponse);
   })
   // 記事作成 POST /api/articles
@@ -141,6 +215,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const { article: input } = c.req.valid("json");
 
       const slug = generateSlug(input.title);
+      const tagList = [...new Set(input.tagList ?? [])];
 
       const [created] = await db
         .insert(articles)
@@ -154,6 +229,24 @@ const app = new Hono<{ Variables: AuthVariables }>()
         .returning();
       if (!created) throw new Error("failed to create article");
 
+      if (tagList.length > 0) {
+        await db
+          .insert(tags)
+          .values(tagList.map((name) => ({ name })))
+          .onConflictDoNothing();
+
+        const tagRows = await db
+          .select()
+          .from(tags)
+          .where(inArray(tags.name, tagList));
+
+        await db
+          .insert(articleTags)
+          .values(
+            tagRows.map((t) => ({ articleId: created.id, tagId: t.id })),
+          );
+      }
+
       const [author] = await db
         .select()
         .from(users)
@@ -161,7 +254,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       if (!author) throw new Error("author not found");
 
       return c.json({
-        article: toArticleJson(created, author),
+        article: toArticleJson(created, author, tagList),
       } satisfies ArticleResponse);
     },
   )

@@ -4,13 +4,14 @@ import type { ArticleResponse } from "../schemas/article";
 export function toArticleJson(
   article: Article,
   author: User,
+  tagList: string[] = [],
 ): ArticleResponse["article"] {
   return {
     slug: article.slug,
     title: article.title,
     description: article.description,
     body: article.body,
-    tagList: [],
+    tagList,
     createdAt: article.createdAt,
     updatedAt: article.updatedAt,
     favorited: false,

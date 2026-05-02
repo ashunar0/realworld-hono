@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -50,6 +50,26 @@ export const comments = sqliteTable("comments", {
     .default(sql`(datetime('now'))`),
 });
 
+export const tags = sqliteTable("tags", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+});
+
+export const articleTags = sqliteTable(
+  "article_tags",
+  {
+    articleId: integer("article_id")
+      .notNull()
+      .references(() => articles.id, { onDelete: "cascade" }),
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.articleId, t.tagId] }),
+  }),
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   articles: many(articles),
   comments: many(comments),
@@ -61,6 +81,22 @@ export const articlesRelations = relations(articles, ({ one, many }) => ({
     references: [users.id],
   }),
   comments: many(comments),
+  articleTags: many(articleTags),
+}));
+
+export const tagsRelations = relations(tags, ({ many }) => ({
+  articleTags: many(articleTags),
+}));
+
+export const articleTagsRelations = relations(articleTags, ({ one }) => ({
+  article: one(articles, {
+    fields: [articleTags.articleId],
+    references: [articles.id],
+  }),
+  tag: one(tags, {
+    fields: [articleTags.tagId],
+    references: [tags.id],
+  }),
 }));
 
 export const commentsRelations = relations(comments, ({ one }) => ({
@@ -82,3 +118,9 @@ export type NewArticle = typeof articles.$inferInsert;
 
 export type Comment = typeof comments.$inferSelect;
 export type NewComment = typeof comments.$inferInsert;
+
+export type Tag = typeof tags.$inferSelect;
+export type NewTag = typeof tags.$inferInsert;
+
+export type ArticleTag = typeof articleTags.$inferSelect;
+export type NewArticleTag = typeof articleTags.$inferInsert;

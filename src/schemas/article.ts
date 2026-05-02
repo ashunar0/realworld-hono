@@ -16,6 +16,7 @@ export const updateArticleSchema = z.object({
     title: z.string().min(1, "can't be empty").optional(),
     description: z.string().min(1, "can't be empty").optional(),
     body: z.string().min(1, "can't be empty").optional(),
+    tagList: z.array(z.string()).optional(),
   }),
 });
 
@@ -25,6 +26,7 @@ export const articlesQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(50).default(20),
   offset: z.coerce.number().int().nonnegative().default(0),
   author: z.string().optional(),
+  tag: z.string().optional(),
 });
 
 export type ArticlesQuery = z.infer<typeof articlesQuerySchema>;

@@ -34,13 +34,15 @@ src/
 ├── features/
 │   ├── users/
 │   │   └── index.ts            ← signup / login / GET PUT /user
-│   └── articles/
-│       ├── index.ts            ← Articles CRUD + comments を chain で route
-│       └── comments/
-│           └── index.ts        ← Comments（basePath で :slug 集約）
+│   ├── articles/
+│   │   ├── index.ts            ← Articles CRUD + tagList + tag filter + comments を route
+│   │   └── comments/
+│   │       └── index.ts        ← Comments（basePath で :slug 集約）
+│   └── tags/
+│       └── index.ts            ← GET /api/tags
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
-│   └── schema.ts               ← users / articles / comments + relations
+│   └── schema.ts               ← users / articles / comments / tags / article_tags + relations
 ├── middleware/
 │   ├── auth.ts                 ← JWT verify、c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
@@ -80,36 +82,37 @@ bun run db:migrate   # migration を DB に当てる
 | 5 | Articles CRUD（5 endpoint）+ author JOIN + filter + pagination | ✅ |
 | 6 | Comments（3 endpoint）+ features/ 分割 | ✅ |
 | 6.5 | **chain pattern 全層適用**（basePath で :slug 解消、`AppType` export） | ✅ |
-| **7** | **Tags（多対多、次回ここから）** | ⏳ |
-| 8 | Favorites | ⏳ |
+| 7 | Tags（多対多、`tags` + `article_tags` + GET /api/tags + tag filter） | ✅ |
+| **8** | **Favorites（次回ここから）** | ⏳ |
 | 9 | Profiles + Follow + Feed | ⏳ |
 
-## 次回 (Step 7: Tags) で実装するもの
+## 次回 (Step 8: Favorites) で実装するもの
 
-RealWorld spec の Tags：
+RealWorld spec の Favorites：
 
 | endpoint | 認証 | 概要 |
 |---|---|---|
-| `GET /api/tags` | 不要 | 全タグ一覧 |
-| `POST /api/articles` | 必須 | request の `tagList` を受け取り紐付け |
-| `GET /api/articles` | 不要 | response に `tagList` を含める |
-| `GET /api/articles?tag=xxx` | 不要 | 特定 tag の article をフィルタ |
+| `POST /api/articles/:slug/favorite` | 必須 | 記事を favorite する |
+| `DELETE /api/articles/:slug/favorite` | 必須 | favorite を解除する |
+| `GET /api/articles?favorited=username` | 不要 | 特定ユーザーが favorite した記事一覧 |
+| `GET /api/articles` | 不要 | response の `favorited` / `favoritesCount` を実値で埋める |
 
 ### 必要な作業
 
-1. `tags` テーブル + `article_tags` 中間テーブル schema 追加（多対多）
-   - relations: article.tags = many(article_tags) → tags、tag.articles = many(article_tags) → articles
-2. migration 生成 + 適用
-3. `src/features/tags/index.ts` を新規作成（chain pattern + `GET /tags`）
-4. articles の POST/PUT/GET handler で `tagList` を読み書き
-5. `articlesQuerySchema` に `tag` を追加、where に反映
+1. `favorites` テーブル schema 追加（多対多: `user_id` × `article_id`、複合主キー、cascade）
+2. relations: user.favorites = many、article.favoritedBy = many
+3. POST/DELETE `/api/articles/:slug/favorite` を `articles/index.ts` に追加（chain pattern）
+4. GET 系で `favorited` / `favoritesCount` を計算して埋める
+   - `favoritesCount` = article ごとの `favorites` 行数
+   - `favorited` = 認証ユーザーがいれば自分が favorite してるか
+5. `articlesQuerySchema` に `favorited` を追加、where に反映
+6. `toArticleJson` を `favorited` / `favoritesCount` を引数で受け取れるように拡張
 
 ### 学習ポイント
 
-- **多対多 relation**：Drizzle の中間テーブル + `relations` 双方向設定
-- **JOIN 戦略**：`with: { tags: { with: { tag: true } } }` で eager load
-- **`toArticleJson` の拡張**：tagList を Article ↔ Tag の名前配列に変換
-- 既存 Article CRUD への影響を最小化
+- **再びの多対多**（Step 7 の構造が活きる）
+- **認証 optional な endpoint**：GET 系は token 無しでも動くが、あれば自分の favorited が分かる → optional auth middleware が必要かも
+- **集計クエリ**：`SELECT COUNT(*) FROM favorites WHERE article_id = ?` を関連 query で eager load する方法
 
 ## コーディング規約・確立済み pattern
 
@@ -188,11 +191,12 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 
 1. このファイルを最初に読む
 2. `git log --oneline` で commit history 把握
-3. ユーザーは "Step 7 の Tags（多対多）を作りたい" 状態で来るはず
-4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6 の流れを踏襲
-5. **`with: { author: true }` は standard pattern**、tags も `with: { tags: { with: { tag: true } } }` で eager load
-6. **chain pattern + basePath は適用済み**。新しい `src/features/tags/` も chain で書き、`articles/index.ts` の `.route("/", tags)` でマウント（`/api` prefix は親 index.ts 側）
-7. dev server は `bun run --hot src/index.ts` で起動、構造変更後は再起動
+3. ユーザーは "Step 8 の Favorites を作りたい" 状態で来るはず
+4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6/7 の流れを踏襲
+5. **2 段 eager load pattern**：`with: { author: true, articleTags: { with: { tag: true } } }` を踏襲、favorites でも同様の構造
+6. **chain pattern + basePath は適用済み**。新しい sub-app も chain で書き、`/api` prefix は親 index.ts 側で付与
+7. **ON CONFLICT DO NOTHING + bulk INSERT** が tag 保存で確立。favorites の冪等な追加でも同じ手が使える
+8. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
 
 ---
 
