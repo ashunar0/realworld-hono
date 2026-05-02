@@ -89,23 +89,26 @@ bun run db:migrate   # migration を DB に当てる
 | 7 | Tags（多対多、`tags` + `article_tags` + GET /api/tags + tag filter） | ✅ |
 | 8 | Favorites（多対多、`favorites` + POST/DELETE /favorite + favorited/Count + ?favorited filter + optionalAuthMiddleware） | ✅ |
 | 9 | Profiles + Follow + Feed（自己参照多対多 + relationName + toAuthorJson 抽出 + 既存 articles の `author.following` 実値化） | ✅ |
-| **10** | **未定（spec 主要 endpoint は完成、次回ここで方針決定）** | ⏳ |
+| 10-A | **spec 細部の精度上げ**（A-1 self-follow 禁止 [DB CHECK + handler 422] / A-3 signup/PUT 重複検知 + 空白 trim、A-2 self-favorite と A-4 エラーメッセージ統一は意図的に skip） | ✅ |
+| **11** | **未定（次回ここで方針決定）** | ⏳ |
 
-## Step 9 で身についたこと（直近サマリ）
+## Step 10-A で身についたこと（直近サマリ）
 
-- **自己参照多対多**：`follows` テーブルの `follower_id` × `following_id` 複合主キー + 両 FK で `users` を参照 + `ON DELETE CASCADE`
-- **`relationName` で曖昧さ解消**：同一 table を 2 方向で参照する場合、Drizzle はテーブルの形だけでは which FK か判別できないので人間が文字列タグで対応関係を教える（Rails の `class_name` + `foreign_key` と同じ目的）
-- `userFollowing` / `userFollowers` という命名に揃えた（**users 側のリスト名 = relationName** にすると後で読みやすい）
-- **`toAuthorJson` 抽出**：article の author block と profile JSON が完全に同じ shape（4 fields）→ 共通化（rule of 3 達成）
-- **eager load で N+1 回避**：`with: { author: { with: { followers: true } } }` で nested with、`a.author.followers.some(f => f.followerId === userId)` で in-memory 計算
+- **SQLite の制約後付け = テーブル再作成 dance**：SQLite は `ALTER TABLE ADD CONSTRAINT` をサポートしてない → drizzle-kit が `__new_table` を作って rename する迂回 SQL を自動生成する。Postgres / MySQL なら 1 行で済む。
+- **`${t.col}` の qualified name は SQLite rename と相性が悪い**：drizzle は `${t.col}` を `"table"."col"` 形式で展開する。SQLite はテーブル rename 時に CHECK 式の中のテーブル名を追従しない → 壊れる。**SQLite の CHECK 制約は column 名直書きで書く**（`sql\`follower_id != following_id\``）。
+- **callback の戻り値は array 推奨**：`(t) => [primaryKey(...), check(...)]`。object 形式（`{ pk: ..., check: ... }`）は legacy。array なら同種の制約を複数並べられて key 命名コストもなし。
+- **defense in depth**：DB CHECK + handler 422 の両層で同じ制約を防御する設計。どちらか片方が抜けても守られる。
+- **重複検知は事前 SELECT 派**：error catch より UX 良い（どのフィールドが衝突したか明示できる）。race condition は個人開発レベルでは割り切り。
+- **`ne(users.id, userId)` で「自分以外」を除外**：PUT /user で自分の email/username を維持する場合に誤検知しないため。
+- **password には `.trim()` を入れない**：エントロピー保持のため。ユーザーが意図したスペース付き password を尊重（NIST 800-63B が passphrase 推奨）。identifier（email/username）と content（title/body）は trim する。
+- **`{ errors: { body: [...] } }` 形式は既に十分統一されてた**：Step 10-A-4 をスキップする判断（spec の field-keyed への大規模 refactor は別 Step）。
 
-## Step 10 候補（次回相談）
+## Step 11 候補（次回相談）
 
-RealWorld spec の主要 endpoint は Step 9 で完成。次は方向の選択肢：
+RealWorld spec の主要 endpoint は完成、Step 10-A で精度も上がった。次は方向の選択肢：
 
 | 案 | 内容 | コメント |
 |---|---|---|
-| **A** | spec の細かい挙動の精度上げ | self-follow / self-favorite を 422 で弾く、validation 強化、エラーメッセージ統一 |
 | **B** | Bruno collection (`gothinkster/realworld` の `specs/api/bruno/`) でテスト走らせる | spec 準拠かどうか自動検証、CI 化も視野 |
 | **C** | bun test で integration test を書く | テスト書く練習、ハーネス整備 |
 | **D** | frontend integration | 親リポの frontend と組み合わせて E2E |
@@ -188,10 +191,10 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ## 次回 Claude セッションへの指示
 
 1. このファイルを最初に読む
-2. `git log --oneline` で commit history 把握（Step 9 まで完了している）
-3. ユーザーは Step 10 の方針を相談する状態で来るはず → 上の **Step 10 候補** 表を見せて選ばせる
-4. もしユーザーが具体的に「次これ」と言ってきたら、Step 5〜9 の流れ（schema → migration → endpoint → 動作確認 → commit）を踏襲
-5. **既存パターンは全て確立**：chain + basePath、eager load (`with: { ... }`)、ON CONFLICT DO NOTHING、optional / required auth、relationName、toAuthorJson / toArticleJson / toCommentJson
+2. `git log --oneline` で commit history 把握（Step 10-A まで完了している）
+3. ユーザーは Step 11 の方針を相談する状態で来るはず → 上の **Step 11 候補** 表を見せて選ばせる
+4. もしユーザーが具体的に「次これ」と言ってきたら、Step 5〜10 の流れ（schema → migration → endpoint → 動作確認 → commit）を踏襲
+5. **既存パターンは全て確立**：chain + basePath、eager load (`with: { ... }`)、ON CONFLICT DO NOTHING、optional / required auth、relationName、toAuthorJson / toArticleJson / toCommentJson、CHECK 制約は column 名直書き、重複検知は事前 SELECT
 6. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
 7. このプロジェクトはコーチモードがデフォルト（明示されなくても closed question + 段階的に進める。memory 参照）
 
