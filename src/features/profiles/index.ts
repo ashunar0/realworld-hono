@@ -53,6 +53,9 @@ const app = new Hono<{ Variables: AuthVariables }>()
     if (!target) {
       return c.json({ errors: { body: ["profile not found"] } }, 404);
     }
+    if (userId === target.id) {
+      return c.json({ errors: { body: ["cannot follow yourself"] } }, 422);
+    }
 
     await db
       .insert(follows)

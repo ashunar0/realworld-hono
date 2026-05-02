@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -65,9 +65,7 @@ export const articleTags = sqliteTable(
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
   },
-  (t) => ({
-    pk: primaryKey({ columns: [t.articleId, t.tagId] }),
-  }),
+  (t) => [primaryKey({ columns: [t.articleId, t.tagId] })],
 );
 
 export const favorites = sqliteTable(
@@ -80,9 +78,7 @@ export const favorites = sqliteTable(
       .notNull()
       .references(() => articles.id, { onDelete: "cascade" }),
   },
-  (t) => ({
-    pk: primaryKey({ columns: [t.userId, t.articleId] }),
-  }),
+  (t) => [primaryKey({ columns: [t.userId, t.articleId] })],
 );
 
 export const follows = sqliteTable(
@@ -95,9 +91,10 @@ export const follows = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
   },
-  (t) => ({
-    pk: primaryKey({ columns: [t.followerId, t.followingId] }),
-  }),
+  (t) => [
+    primaryKey({ columns: [t.followerId, t.followingId] }),
+    check("no_self_follow", sql`follower_id != following_id`),
+  ],
 );
 
 export const usersRelations = relations(users, ({ many }) => ({
