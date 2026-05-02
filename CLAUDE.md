@@ -35,26 +35,30 @@ src/
 │   ├── users/
 │   │   └── index.ts            ← signup / login / GET PUT /user
 │   ├── articles/
-│   │   ├── index.ts            ← Articles CRUD + tagList + tag/favorited filter + favorite POST/DELETE + comments を route
+│   │   ├── index.ts            ← Articles CRUD + tagList + tag/favorited filter + favorite + feed + comments を route
 │   │   └── comments/
 │   │       └── index.ts        ← Comments（basePath で :slug 集約）
-│   └── tags/
-│       └── index.ts            ← GET /api/tags
+│   ├── tags/
+│   │   └── index.ts            ← GET /api/tags
+│   └── profiles/
+│       └── index.ts            ← GET /:username + POST/DELETE /:username/follow（basePath で :username 集約）
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
-│   └── schema.ts               ← users / articles / comments / tags / article_tags / favorites + relations
+│   └── schema.ts               ← users / articles / comments / tags / article_tags / favorites / follows + relations
 ├── middleware/
 │   ├── auth.ts                 ← authMiddleware（必須）/ optionalAuthMiddleware（任意）+ c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
 ├── lib/
 │   ├── slug.ts                 ← title -> slug
-│   ├── article.ts              ← toArticleJson(article, author, tagList?, favorited?, favoritesCount?)
+│   ├── article.ts              ← toArticleJson(article, author, tagList?, favorited?, favoritesCount?, following?)
+│   ├── author.ts               ← toAuthorJson(user, following) ← profile / article.author で共通
 │   ├── comment.ts              ← toCommentJson(comment, author)
 │   └── jwt.ts                  ← signToken
 └── schemas/
     ├── user.ts                 ← zod + types
-    ├── article.ts              ← zod + types
-    └── comment.ts              ← zod + types
+    ├── article.ts              ← zod + types（articlesQuerySchema / feedQuerySchema 含む）
+    ├── comment.ts              ← zod + types
+    └── profile.ts              ← Profile / ProfileResponse 型のみ（GET なので zod なし）
 
 drizzle/                        ← 自動生成 migration
 scripts/migrate.ts              ← bun-native migration runner
@@ -84,34 +88,29 @@ bun run db:migrate   # migration を DB に当てる
 | 6.5 | **chain pattern 全層適用**（basePath で :slug 解消、`AppType` export） | ✅ |
 | 7 | Tags（多対多、`tags` + `article_tags` + GET /api/tags + tag filter） | ✅ |
 | 8 | Favorites（多対多、`favorites` + POST/DELETE /favorite + favorited/Count + ?favorited filter + optionalAuthMiddleware） | ✅ |
-| **9** | **Profiles + Follow + Feed（次回ここから）** | ⏳ |
+| 9 | Profiles + Follow + Feed（自己参照多対多 + relationName + toAuthorJson 抽出 + 既存 articles の `author.following` 実値化） | ✅ |
+| **10** | **未定（spec 主要 endpoint は完成、次回ここで方針決定）** | ⏳ |
 
-## 次回 (Step 9: Profiles + Follow + Feed) で実装するもの
+## Step 9 で身についたこと（直近サマリ）
 
-RealWorld spec の Profiles / Follow / Feed：
+- **自己参照多対多**：`follows` テーブルの `follower_id` × `following_id` 複合主キー + 両 FK で `users` を参照 + `ON DELETE CASCADE`
+- **`relationName` で曖昧さ解消**：同一 table を 2 方向で参照する場合、Drizzle はテーブルの形だけでは which FK か判別できないので人間が文字列タグで対応関係を教える（Rails の `class_name` + `foreign_key` と同じ目的）
+- `userFollowing` / `userFollowers` という命名に揃えた（**users 側のリスト名 = relationName** にすると後で読みやすい）
+- **`toAuthorJson` 抽出**：article の author block と profile JSON が完全に同じ shape（4 fields）→ 共通化（rule of 3 達成）
+- **eager load で N+1 回避**：`with: { author: { with: { followers: true } } }` で nested with、`a.author.followers.some(f => f.followerId === userId)` で in-memory 計算
 
-| endpoint | 認証 | 概要 |
+## Step 10 候補（次回相談）
+
+RealWorld spec の主要 endpoint は Step 9 で完成。次は方向の選択肢：
+
+| 案 | 内容 | コメント |
 |---|---|---|
-| `GET /api/profiles/:username` | optional | プロフィール取得（`following` 状態も返す） |
-| `POST /api/profiles/:username/follow` | 必須 | フォローする |
-| `DELETE /api/profiles/:username/follow` | 必須 | フォロー解除 |
-| `GET /api/articles/feed` | 必須 | フォロー中ユーザーの記事一覧 |
-| `GET /api/articles` / `:slug` | 既存 | `author.following` を実値で埋める |
-
-### 必要な作業
-
-1. `follows` テーブル schema 追加（自己参照多対多: `follower_id` × `following_id`、複合主キー、cascade）
-2. relations: user.following / user.followers（同じテーブルを 2 方向で参照する練習）
-3. `features/profiles/` を新設し chain で 3 endpoint を実装
-4. GET /api/articles/feed を articles に追加（auth 必須・基本 list と似てるが「自分がフォロー中の author」で絞る）
-5. `toAuthorJson` 抽出を検討（toArticleJson 内の author block を切り出して `following` を埋める）
-6. 既存 GET /articles / GET /:slug の `author.following` を `optionalAuthMiddleware` の userId で計算
-
-### 学習ポイント
-
-- **自己参照テーブル**（user × user の多対多）で、relations の書き方が初挑戦の形になる
-- **Feed = フィルタ済み一覧**：list endpoint と再利用可能な部分が出てくる
-- ここまで進めると **Profile / Article / Comment / Favorite / Follow** の主要 5 オブジェクトの relations が揃う
+| **A** | spec の細かい挙動の精度上げ | self-follow / self-favorite を 422 で弾く、validation 強化、エラーメッセージ統一 |
+| **B** | Bruno collection (`gothinkster/realworld` の `specs/api/bruno/`) でテスト走らせる | spec 準拠かどうか自動検証、CI 化も視野 |
+| **C** | bun test で integration test を書く | テスト書く練習、ハーネス整備 |
+| **D** | frontend integration | 親リポの frontend と組み合わせて E2E |
+| **E** | refactor / cleanup | ON CONFLICT のロジックを helper 化、handlers のさらなる DRY 化 |
+| **F** | 別 FW で書き直し（比較） | 同じ spec を Fastify / Express / Elysia などで実装して比較 |
 
 ## コーディング規約・確立済み pattern
 
@@ -162,7 +161,7 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ### refactor
 
 - **rule of 3**：3回目の重複で抽出
-- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toCommentJson / generateSlug / signToken
+- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toAuthorJson / toCommentJson / generateSlug / signToken
 
 ### chain pattern（Step 6.5 で全層適用済み）
 
@@ -189,14 +188,12 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ## 次回 Claude セッションへの指示
 
 1. このファイルを最初に読む
-2. `git log --oneline` で commit history 把握
-3. ユーザーは "Step 9 の Profiles + Follow + Feed を作りたい" 状態で来るはず
-4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6/7/8 の流れを踏襲
-5. **eager load pattern** が定着済み：`with: { ... }` で N+1 を避ける（Step 8 の `favoritedBy: true` を踏襲、follows でも同様）
-6. **chain pattern + basePath は適用済み**。新しい `features/profiles/` も chain で書き、`/api` prefix は親 index.ts 側で付与
-7. **ON CONFLICT DO NOTHING** が follow の冪等な追加でも使える（Step 7 tag、Step 8 favorite で確立）
-8. **`optionalAuthMiddleware` が用意済み**：GET /api/profiles/:username の `following` 計算でこれを使う（token あれば自分の follow 状態を返す）
-9. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
+2. `git log --oneline` で commit history 把握（Step 9 まで完了している）
+3. ユーザーは Step 10 の方針を相談する状態で来るはず → 上の **Step 10 候補** 表を見せて選ばせる
+4. もしユーザーが具体的に「次これ」と言ってきたら、Step 5〜9 の流れ（schema → migration → endpoint → 動作確認 → commit）を踏襲
+5. **既存パターンは全て確立**：chain + basePath、eager load (`with: { ... }`)、ON CONFLICT DO NOTHING、optional / required auth、relationName、toAuthorJson / toArticleJson / toCommentJson
+6. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
+7. このプロジェクトはコーチモードがデフォルト（明示されなくても closed question + 段階的に進める。memory 参照）
 
 ---
 
