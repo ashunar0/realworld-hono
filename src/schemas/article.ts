@@ -27,6 +27,7 @@ export const articlesQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
   author: z.string().optional(),
   tag: z.string().optional(),
+  favorited: z.string().optional(),
 });
 
 export type ArticlesQuery = z.infer<typeof articlesQuerySchema>;

@@ -35,20 +35,20 @@ src/
 │   ├── users/
 │   │   └── index.ts            ← signup / login / GET PUT /user
 │   ├── articles/
-│   │   ├── index.ts            ← Articles CRUD + tagList + tag filter + comments を route
+│   │   ├── index.ts            ← Articles CRUD + tagList + tag/favorited filter + favorite POST/DELETE + comments を route
 │   │   └── comments/
 │   │       └── index.ts        ← Comments（basePath で :slug 集約）
 │   └── tags/
 │       └── index.ts            ← GET /api/tags
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
-│   └── schema.ts               ← users / articles / comments / tags / article_tags + relations
+│   └── schema.ts               ← users / articles / comments / tags / article_tags / favorites + relations
 ├── middleware/
-│   ├── auth.ts                 ← JWT verify、c.set("userId")
+│   ├── auth.ts                 ← authMiddleware（必須）/ optionalAuthMiddleware（任意）+ c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
 ├── lib/
 │   ├── slug.ts                 ← title -> slug
-│   ├── article.ts              ← toArticleJson(article, author)
+│   ├── article.ts              ← toArticleJson(article, author, tagList?, favorited?, favoritesCount?)
 │   ├── comment.ts              ← toCommentJson(comment, author)
 │   └── jwt.ts                  ← signToken
 └── schemas/
@@ -83,36 +83,35 @@ bun run db:migrate   # migration を DB に当てる
 | 6 | Comments（3 endpoint）+ features/ 分割 | ✅ |
 | 6.5 | **chain pattern 全層適用**（basePath で :slug 解消、`AppType` export） | ✅ |
 | 7 | Tags（多対多、`tags` + `article_tags` + GET /api/tags + tag filter） | ✅ |
-| **8** | **Favorites（次回ここから）** | ⏳ |
-| 9 | Profiles + Follow + Feed | ⏳ |
+| 8 | Favorites（多対多、`favorites` + POST/DELETE /favorite + favorited/Count + ?favorited filter + optionalAuthMiddleware） | ✅ |
+| **9** | **Profiles + Follow + Feed（次回ここから）** | ⏳ |
 
-## 次回 (Step 8: Favorites) で実装するもの
+## 次回 (Step 9: Profiles + Follow + Feed) で実装するもの
 
-RealWorld spec の Favorites：
+RealWorld spec の Profiles / Follow / Feed：
 
 | endpoint | 認証 | 概要 |
 |---|---|---|
-| `POST /api/articles/:slug/favorite` | 必須 | 記事を favorite する |
-| `DELETE /api/articles/:slug/favorite` | 必須 | favorite を解除する |
-| `GET /api/articles?favorited=username` | 不要 | 特定ユーザーが favorite した記事一覧 |
-| `GET /api/articles` | 不要 | response の `favorited` / `favoritesCount` を実値で埋める |
+| `GET /api/profiles/:username` | optional | プロフィール取得（`following` 状態も返す） |
+| `POST /api/profiles/:username/follow` | 必須 | フォローする |
+| `DELETE /api/profiles/:username/follow` | 必須 | フォロー解除 |
+| `GET /api/articles/feed` | 必須 | フォロー中ユーザーの記事一覧 |
+| `GET /api/articles` / `:slug` | 既存 | `author.following` を実値で埋める |
 
 ### 必要な作業
 
-1. `favorites` テーブル schema 追加（多対多: `user_id` × `article_id`、複合主キー、cascade）
-2. relations: user.favorites = many、article.favoritedBy = many
-3. POST/DELETE `/api/articles/:slug/favorite` を `articles/index.ts` に追加（chain pattern）
-4. GET 系で `favorited` / `favoritesCount` を計算して埋める
-   - `favoritesCount` = article ごとの `favorites` 行数
-   - `favorited` = 認証ユーザーがいれば自分が favorite してるか
-5. `articlesQuerySchema` に `favorited` を追加、where に反映
-6. `toArticleJson` を `favorited` / `favoritesCount` を引数で受け取れるように拡張
+1. `follows` テーブル schema 追加（自己参照多対多: `follower_id` × `following_id`、複合主キー、cascade）
+2. relations: user.following / user.followers（同じテーブルを 2 方向で参照する練習）
+3. `features/profiles/` を新設し chain で 3 endpoint を実装
+4. GET /api/articles/feed を articles に追加（auth 必須・基本 list と似てるが「自分がフォロー中の author」で絞る）
+5. `toAuthorJson` 抽出を検討（toArticleJson 内の author block を切り出して `following` を埋める）
+6. 既存 GET /articles / GET /:slug の `author.following` を `optionalAuthMiddleware` の userId で計算
 
 ### 学習ポイント
 
-- **再びの多対多**（Step 7 の構造が活きる）
-- **認証 optional な endpoint**：GET 系は token 無しでも動くが、あれば自分の favorited が分かる → optional auth middleware が必要かも
-- **集計クエリ**：`SELECT COUNT(*) FROM favorites WHERE article_id = ?` を関連 query で eager load する方法
+- **自己参照テーブル**（user × user の多対多）で、relations の書き方が初挑戦の形になる
+- **Feed = フィルタ済み一覧**：list endpoint と再利用可能な部分が出てくる
+- ここまで進めると **Profile / Article / Comment / Favorite / Follow** の主要 5 オブジェクトの relations が揃う
 
 ## コーディング規約・確立済み pattern
 
@@ -163,7 +162,7 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ### refactor
 
 - **rule of 3**：3回目の重複で抽出
-- 抽出済み: validateJson / validateQuery / authMiddleware / toArticleJson / toCommentJson / generateSlug / signToken
+- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toCommentJson / generateSlug / signToken
 
 ### chain pattern（Step 6.5 で全層適用済み）
 
@@ -191,12 +190,13 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 
 1. このファイルを最初に読む
 2. `git log --oneline` で commit history 把握
-3. ユーザーは "Step 8 の Favorites を作りたい" 状態で来るはず
-4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6/7 の流れを踏襲
-5. **2 段 eager load pattern**：`with: { author: true, articleTags: { with: { tag: true } } }` を踏襲、favorites でも同様の構造
-6. **chain pattern + basePath は適用済み**。新しい sub-app も chain で書き、`/api` prefix は親 index.ts 側で付与
-7. **ON CONFLICT DO NOTHING + bulk INSERT** が tag 保存で確立。favorites の冪等な追加でも同じ手が使える
-8. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
+3. ユーザーは "Step 9 の Profiles + Follow + Feed を作りたい" 状態で来るはず
+4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6/7/8 の流れを踏襲
+5. **eager load pattern** が定着済み：`with: { ... }` で N+1 を避ける（Step 8 の `favoritedBy: true` を踏襲、follows でも同様）
+6. **chain pattern + basePath は適用済み**。新しい `features/profiles/` も chain で書き、`/api` prefix は親 index.ts 側で付与
+7. **ON CONFLICT DO NOTHING** が follow の冪等な追加でも使える（Step 7 tag、Step 8 favorite で確立）
+8. **`optionalAuthMiddleware` が用意済み**：GET /api/profiles/:username の `following` 計算でこれを使う（token あれば自分の follow 状態を返す）
+9. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
 
 ---
 

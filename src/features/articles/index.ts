@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { articleTags, articles, tags, users } from "../../db/schema";
+import { articleTags, articles, favorites, tags, users } from "../../db/schema";
 import {
   articlesQuerySchema,
   createArticleSchema,
@@ -9,7 +9,11 @@ import {
   type ArticleResponse,
   type ArticlesResponse,
 } from "../../schemas/article";
-import { authMiddleware, type AuthVariables } from "../../middleware/auth";
+import {
+  authMiddleware,
+  optionalAuthMiddleware,
+  type AuthVariables,
+} from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
 import { generateSlug } from "../../lib/slug";
 import { toArticleJson } from "../../lib/article";
@@ -17,78 +21,121 @@ import comments from "./comments";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
-  .get("/articles", validateQuery(articlesQuerySchema), async (c) => {
-    const { limit, offset, author, tag } = c.req.valid("query");
+  .get(
+    "/articles",
+    optionalAuthMiddleware,
+    validateQuery(articlesQuerySchema),
+    async (c) => {
+      const { limit, offset, author, tag, favorited } = c.req.valid("query");
+      const userId = c.get("userId");
 
-    const conditions = [];
-    if (author !== undefined) {
-      const [u] = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.username, author));
-      if (!u) {
-        return c.json({
-          articles: [],
-          articlesCount: 0,
-        } satisfies ArticlesResponse);
+      const conditions = [];
+      if (author !== undefined) {
+        const [u] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.username, author));
+        if (!u) {
+          return c.json({
+            articles: [],
+            articlesCount: 0,
+          } satisfies ArticlesResponse);
+        }
+        conditions.push(eq(articles.authorId, u.id));
       }
-      conditions.push(eq(articles.authorId, u.id));
-    }
 
-    if (tag !== undefined) {
-      const [t] = await db
-        .select({ id: tags.id })
-        .from(tags)
-        .where(eq(tags.name, tag));
-      if (!t) {
-        return c.json({
-          articles: [],
-          articlesCount: 0,
-        } satisfies ArticlesResponse);
+      if (tag !== undefined) {
+        const [t] = await db
+          .select({ id: tags.id })
+          .from(tags)
+          .where(eq(tags.name, tag));
+        if (!t) {
+          return c.json({
+            articles: [],
+            articlesCount: 0,
+          } satisfies ArticlesResponse);
+        }
+        const ats = await db
+          .select({ articleId: articleTags.articleId })
+          .from(articleTags)
+          .where(eq(articleTags.tagId, t.id));
+        if (ats.length === 0) {
+          return c.json({
+            articles: [],
+            articlesCount: 0,
+          } satisfies ArticlesResponse);
+        }
+        conditions.push(
+          inArray(
+            articles.id,
+            ats.map((at) => at.articleId),
+          ),
+        );
       }
-      const ats = await db
-        .select({ articleId: articleTags.articleId })
-        .from(articleTags)
-        .where(eq(articleTags.tagId, t.id));
-      if (ats.length === 0) {
-        return c.json({
-          articles: [],
-          articlesCount: 0,
-        } satisfies ArticlesResponse);
+
+      if (favorited !== undefined) {
+        const [u] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.username, favorited));
+        if (!u) {
+          return c.json({
+            articles: [],
+            articlesCount: 0,
+          } satisfies ArticlesResponse);
+        }
+        const favs = await db
+          .select({ articleId: favorites.articleId })
+          .from(favorites)
+          .where(eq(favorites.userId, u.id));
+        if (favs.length === 0) {
+          return c.json({
+            articles: [],
+            articlesCount: 0,
+          } satisfies ArticlesResponse);
+        }
+        conditions.push(
+          inArray(
+            articles.id,
+            favs.map((f) => f.articleId),
+          ),
+        );
       }
-      conditions.push(
-        inArray(
-          articles.id,
-          ats.map((at) => at.articleId),
+
+      const whereClause = conditions.length ? and(...conditions) : undefined;
+
+      const list = await db.query.articles.findMany({
+        where: whereClause,
+        with: {
+          author: true,
+          articleTags: { with: { tag: true } },
+          favoritedBy: true,
+        },
+        limit,
+        offset,
+        orderBy: desc(articles.createdAt),
+      });
+
+      const [totalRow] = await db
+        .select({ total: count() })
+        .from(articles)
+        .where(whereClause);
+
+      return c.json({
+        articles: list.map((a) =>
+          toArticleJson(
+            a,
+            a.author,
+            a.articleTags.map((at) => at.tag.name),
+            userId !== undefined &&
+              a.favoritedBy.some((f) => f.userId === userId),
+            a.favoritedBy.length,
+          ),
         ),
-      );
-    }
-
-    const whereClause = conditions.length ? and(...conditions) : undefined;
-
-    const list = await db.query.articles.findMany({
-      where: whereClause,
-      with: {
-        author: true,
-        articleTags: { with: { tag: true } },
-      },
-      limit,
-      offset,
-      orderBy: desc(articles.createdAt),
-    });
-
-    const [totalRow] = await db
-      .select({ total: count() })
-      .from(articles)
-      .where(whereClause);
-
-    return c.json({
-      articles: list.map((a) =>
-        toArticleJson(a, a.author, a.articleTags.map((at) => at.tag.name)),
-      ),
-      articlesCount: totalRow?.total ?? 0,
-    } satisfies ArticlesResponse);
-  })
+        articlesCount: totalRow?.total ?? 0,
+      } satisfies ArticlesResponse);
+    },
+  )
   // 記事更新 PUT /api/articles/:slug
   .put(
     "/articles/:slug",
@@ -183,8 +230,9 @@ const app = new Hono<{ Variables: AuthVariables }>()
     return c.body(null, 204);
   })
   // 記事取得 GET /api/articles/:slug
-  .get("/articles/:slug", async (c) => {
+  .get("/articles/:slug", optionalAuthMiddleware, async (c) => {
     const slug = c.req.param("slug");
+    const userId = c.get("userId");
 
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
@@ -197,11 +245,32 @@ const app = new Hono<{ Variables: AuthVariables }>()
       return c.json({ errors: { body: ["article not found"] } }, 404);
     }
 
+    const [countRow] = await db
+      .select({ total: count() })
+      .from(favorites)
+      .where(eq(favorites.articleId, article.id));
+
+    let favorited = false;
+    if (userId !== undefined) {
+      const [own] = await db
+        .select()
+        .from(favorites)
+        .where(
+          and(
+            eq(favorites.userId, userId),
+            eq(favorites.articleId, article.id),
+          ),
+        );
+      favorited = own !== undefined;
+    }
+
     return c.json({
       article: toArticleJson(
         article,
         article.author,
         article.articleTags.map((at) => at.tag.name),
+        favorited,
+        countRow?.total ?? 0,
       ),
     } satisfies ArticleResponse);
   })
@@ -258,6 +327,82 @@ const app = new Hono<{ Variables: AuthVariables }>()
       } satisfies ArticleResponse);
     },
   )
+  // 記事 favorite POST /api/articles/:slug/favorite
+  .post("/articles/:slug/favorite", authMiddleware, async (c) => {
+    const userId = c.get("userId");
+    const slug = c.req.param("slug");
+
+    const article = await db.query.articles.findFirst({
+      where: eq(articles.slug, slug),
+      with: {
+        author: true,
+        articleTags: { with: { tag: true } },
+      },
+    });
+    if (!article) {
+      return c.json({ errors: { body: ["article not found"] } }, 404);
+    }
+
+    await db
+      .insert(favorites)
+      .values({ userId, articleId: article.id })
+      .onConflictDoNothing();
+
+    const [countRow] = await db
+      .select({ total: count() })
+      .from(favorites)
+      .where(eq(favorites.articleId, article.id));
+
+    return c.json({
+      article: toArticleJson(
+        article,
+        article.author,
+        article.articleTags.map((at) => at.tag.name),
+        true,
+        countRow?.total ?? 0,
+      ),
+    } satisfies ArticleResponse);
+  })
+  // 記事 favorite 解除 DELETE /api/articles/:slug/favorite
+  .delete("/articles/:slug/favorite", authMiddleware, async (c) => {
+    const userId = c.get("userId");
+    const slug = c.req.param("slug");
+
+    const article = await db.query.articles.findFirst({
+      where: eq(articles.slug, slug),
+      with: {
+        author: true,
+        articleTags: { with: { tag: true } },
+      },
+    });
+    if (!article) {
+      return c.json({ errors: { body: ["article not found"] } }, 404);
+    }
+
+    await db
+      .delete(favorites)
+      .where(
+        and(
+          eq(favorites.userId, userId),
+          eq(favorites.articleId, article.id),
+        ),
+      );
+
+    const [countRow] = await db
+      .select({ total: count() })
+      .from(favorites)
+      .where(eq(favorites.articleId, article.id));
+
+    return c.json({
+      article: toArticleJson(
+        article,
+        article.author,
+        article.articleTags.map((at) => at.tag.name),
+        false,
+        countRow?.total ?? 0,
+      ),
+    } satisfies ArticleResponse);
+  })
   // コメント sub-app をネストマウント（prefix は子の basePath 側で持つ）
   .route("/", comments);
 

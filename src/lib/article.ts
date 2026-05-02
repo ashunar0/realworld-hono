@@ -5,6 +5,8 @@ export function toArticleJson(
   article: Article,
   author: User,
   tagList: string[] = [],
+  favorited: boolean = false,
+  favoritesCount: number = 0,
 ): ArticleResponse["article"] {
   return {
     slug: article.slug,
@@ -14,8 +16,8 @@ export function toArticleJson(
     tagList,
     createdAt: article.createdAt,
     updatedAt: article.updatedAt,
-    favorited: false,
-    favoritesCount: 0,
+    favorited,
+    favoritesCount,
     author: {
       username: author.username,
       bio: author.bio,

@@ -33,3 +33,30 @@ export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
     await next();
   },
 );
+
+export type OptionalAuthVariables = {
+  userId?: number;
+};
+
+export const optionalAuthMiddleware = createMiddleware<{
+  Variables: OptionalAuthVariables;
+}>(async (c, next) => {
+  const header = c.req.header("Authorization");
+  if (!header || !header.startsWith("Token ")) {
+    await next();
+    return;
+  }
+
+  const token = header.slice("Token ".length);
+
+  try {
+    const payload = await verify(token, secret, "HS256");
+    if (typeof payload.sub === "string") {
+      c.set("userId", Number(payload.sub));
+    }
+  } catch {
+    // token が不正でも anonymous として通す
+  }
+
+  await next();
+});
