@@ -3,9 +3,9 @@
 **RealWorld (Conduit) backend** を Hono で実装する **学習プロジェクト**。
 
 - リポジトリ: `~/dev/sample/real-world/backend/hono`
-- 親リポジトリ: `~/dev/sample/real-world/{frontend,backend}` ← 同じ RealWorld を複数 FW で実装して比較する構造
+- 親リポジトリ: `~/dev/sample/real-world/{specs,backend,frontend}` ← 同じ RealWorld を複数 FW で実装して比較する構造
 - 仕様: https://realworld-docs.netlify.app
-- Postman → Bruno collection: `gothinkster/realworld` repo の `specs/api/bruno/`
+- Bruno collection: `~/dev/sample/real-world/specs/bruno/`（`gothinkster/realworld` の `specs/api/bruno/` をコピー、151 ファイル、`bru run --env local` で全 endpoint spec 準拠検証）
 
 ## 学習目的
 
@@ -90,30 +90,47 @@ bun run db:migrate   # migration を DB に当てる
 | 8 | Favorites（多対多、`favorites` + POST/DELETE /favorite + favorited/Count + ?favorited filter + optionalAuthMiddleware） | ✅ |
 | 9 | Profiles + Follow + Feed（自己参照多対多 + relationName + toAuthorJson 抽出 + 既存 articles の `author.following` 実値化） | ✅ |
 | 10-A | **spec 細部の精度上げ**（A-1 self-follow 禁止 [DB CHECK + handler 422] / A-3 signup/PUT 重複検知 + 空白 trim、A-2 self-favorite と A-4 エラーメッセージ統一は意図的に skip） | ✅ |
-| **11** | **未定（次回ここで方針決定）** | ⏳ |
+| 11-B | **Bruno collection で spec 100% 準拠**（149/149 緑、status code / error 形式 [field-keyed] / datetime ISO / null normalize / list body 除外 / orderBy stable / zod 順序 / 文言統一 を全部対応） | ✅ |
+| **12** | **未定（次回ここで方針決定）** | ⏳ |
 
-## Step 10-A で身についたこと（直近サマリ）
+## Step 11-B で身についたこと（直近サマリ）
+
+- **Bruno = git-friendly な API client + collection runner**（Postman / Insomnia / Thunder Client 系の OSS 版）。RealWorld 公式が `specs/api/bruno/` に **実行可能 spec** を提供しているので、**自前で test scenario を書く必要なし**で spec 準拠を客観確認できる。
+- **CLI で一括実行**：`bun add -g @usebruno/cli` → `bru run --env local` で 149 リクエストを 11 秒で全部走らせる。比較プロジェクトでは collection をそのまま使い回せるのが最大の利点。
+- **spec から学んだ "RealWorld の作法"**：
+  - **POST create は 201 Created**（signup, article, comment）。login / favorite / follow は 200。
+  - **error response は field-keyed**：`{errors: {<field>: [...]}}`。`token`/`credentials`/`article`/`comment`/`profile`/`email`/`username`/`title`/`description`/`body` 等。
+  - **重複は 409 Conflict**（422 ではない）+ `["has already been taken"]`
+  - **認証失敗は 401 + credentials key**（validation の 422 と区別）+ `["invalid"]`
+  - **validation 422** + `["can't be blank"]`（Rails 流の文言）
+  - **404 / 403** も resource 名キーで `["not found"]` / `["forbidden"]`
+- **datetime は ISO 8601** で返す。SQLite default の `(datetime('now'))` は秒単位 + スペース区切りで spec 違反 → INSERT/UPDATE で `new Date().toISOString()` を明示渡し、表示時 `toIso(s)` で両形式（SQLite default と ISO）を吸収。
+- **空文字 → null normalize**：spec は PUT /user の bio / image を「`""` を渡したら null として保存」と期待。zod じゃなく handler 層で `normalizeNullable` 関数で対応。
+- **article list は body フィールドを除外**：summary 用 shape。`toArticleListJson(...args)` で `toArticleJson` の結果から `{body, ...rest}` で destructure。型は `Omit<ArticleResponse["article"], "body">`。
+- **orderBy stable**：`desc(createdAt)` だけだと同秒で順序不安定 → `[desc(createdAt), desc(id)]` で tiebreak。
+- **zod の制約順序が大事**：`z.string().email()` は空文字を「`must be a valid email`」と返す → `min(1, "can't be blank").email(...)` の順にして空文字は blank として弾く。`min(8)` も同様で、先に `min(1, "can't be blank")` を入れる。
+
+## Step 10-A で身についたこと
 
 - **SQLite の制約後付け = テーブル再作成 dance**：SQLite は `ALTER TABLE ADD CONSTRAINT` をサポートしてない → drizzle-kit が `__new_table` を作って rename する迂回 SQL を自動生成する。Postgres / MySQL なら 1 行で済む。
 - **`${t.col}` の qualified name は SQLite rename と相性が悪い**：drizzle は `${t.col}` を `"table"."col"` 形式で展開する。SQLite はテーブル rename 時に CHECK 式の中のテーブル名を追従しない → 壊れる。**SQLite の CHECK 制約は column 名直書きで書く**（`sql\`follower_id != following_id\``）。
 - **callback の戻り値は array 推奨**：`(t) => [primaryKey(...), check(...)]`。object 形式（`{ pk: ..., check: ... }`）は legacy。array なら同種の制約を複数並べられて key 命名コストもなし。
-- **defense in depth**：DB CHECK + handler 422 の両層で同じ制約を防御する設計。どちらか片方が抜けても守られる。
+- **defense in depth**：DB CHECK + handler 422 の両層で同じ制約を防御する設計。
 - **重複検知は事前 SELECT 派**：error catch より UX 良い（どのフィールドが衝突したか明示できる）。race condition は個人開発レベルでは割り切り。
 - **`ne(users.id, userId)` で「自分以外」を除外**：PUT /user で自分の email/username を維持する場合に誤検知しないため。
 - **password には `.trim()` を入れない**：エントロピー保持のため。ユーザーが意図したスペース付き password を尊重（NIST 800-63B が passphrase 推奨）。identifier（email/username）と content（title/body）は trim する。
-- **`{ errors: { body: [...] } }` 形式は既に十分統一されてた**：Step 10-A-4 をスキップする判断（spec の field-keyed への大規模 refactor は別 Step）。
 
-## Step 11 候補（次回相談）
+## Step 12 候補（次回相談）
 
-RealWorld spec の主要 endpoint は完成、Step 10-A で精度も上がった。次は方向の選択肢：
+spec 100% 準拠の **完成形 reference 実装**になった。次は方向の選択肢：
 
 | 案 | 内容 | コメント |
 |---|---|---|
-| **B** | Bruno collection (`gothinkster/realworld` の `specs/api/bruno/`) でテスト走らせる | spec 準拠かどうか自動検証、CI 化も視野 |
-| **C** | bun test で integration test を書く | テスト書く練習、ハーネス整備 |
-| **D** | frontend integration | 親リポの frontend と組み合わせて E2E |
-| **E** | refactor / cleanup | ON CONFLICT のロジックを helper 化、handlers のさらなる DRY 化 |
-| **F** | 別 FW で書き直し（比較） | 同じ spec を Fastify / Express / Elysia などで実装して比較 |
+| **C** | bun test で integration test を書く | Bruno があれば外部から検証は十分。internal logic の単体テスト練習として |
+| **D** | frontend integration | 親リポの frontend と組み合わせて E2E。実際の UI で動かす達成感 |
+| **E** | refactor / cleanup | ON CONFLICT helper 化、handlers の DRY 化、normalizeNullable 横展開など |
+| **F** | 別 FW で書き直し（比較） | **同じ Bruno collection をそのまま使える**ので spec 準拠の客観比較がしやすい。Fastify / Express / Elysia / HonoX / Rails / Vue / React + Hono など |
+| **G** | 比較プロジェクトに移る前に、現プロジェクトに比較用メトリクス（コード行数、起動時間、bundle size、応答時間など）を計測しておく | 比較対象を増やした時に役立つ |
 
 ## コーディング規約・確立済み pattern
 
@@ -129,19 +146,24 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 
 ### エラー response
 
-すべて RealWorld spec 形式：
+RealWorld spec 形式（**field-keyed**、Step 11-B で確定）：
 
 ```json
-{ "errors": { "body": ["..."] } }
+{ "errors": { "<field>": ["<message>"] } }
 ```
 
-| code | 用途 |
-|---|---|
-| 401 | 未認証（token 無し / 改ざん / 期限切れ） |
-| 403 | 認証済みだが権限なし（他人のリソース） |
-| 404 | リソース無し |
-| 422 | validation エラー |
-| 204 | DELETE 成功 |
+| code | 用途 | 形式例 |
+|---|---|---|
+| 401 (no token) | token 無し / 改ざん / 期限切れ | `{errors: {token: ["is missing"]}}` |
+| 401 (login) | login 失敗（unknown email / wrong password） | `{errors: {credentials: ["invalid"]}}` |
+| 403 | 他人のリソースを編集しようとした | `{errors: {article\|comment: ["forbidden"]}}` |
+| 404 | リソース無し | `{errors: {article\|comment\|profile\|user: ["not found"]}}` |
+| 409 | 重複（signup / PUT /user の email/username） | `{errors: {email\|username: ["has already been taken"]}}` |
+| 422 (validation) | zod 失敗 | `{errors: {<field>: ["can't be blank"]}}`（field 名は zod path の最後） |
+| 422 (semantics) | self-follow など | `{errors: {profile: ["cannot follow yourself"]}}` |
+| 201 | POST create 系（signup, article, comment） | body は通常の create response |
+| 200 | login, follow, favorite, GET, PUT | |
+| 204 | DELETE 成功 | body 無し |
 
 ### DB 操作
 
@@ -164,7 +186,7 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ### refactor
 
 - **rule of 3**：3回目の重複で抽出
-- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toAuthorJson / toCommentJson / generateSlug / signToken
+- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toArticleListJson / toAuthorJson / toCommentJson / generateSlug / signToken / normalizeNullable（users handler 内）
 
 ### chain pattern（Step 6.5 で全層適用済み）
 
@@ -191,12 +213,13 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ## 次回 Claude セッションへの指示
 
 1. このファイルを最初に読む
-2. `git log --oneline` で commit history 把握（Step 10-A まで完了している）
-3. ユーザーは Step 11 の方針を相談する状態で来るはず → 上の **Step 11 候補** 表を見せて選ばせる
+2. `git log --oneline` で commit history 把握（Step 11-B まで完了している、spec 100% 準拠の完成形）
+3. ユーザーは Step 12 の方針を相談する状態で来るはず → 上の **Step 12 候補** 表を見せて選ばせる
 4. もしユーザーが具体的に「次これ」と言ってきたら、Step 5〜10 の流れ（schema → migration → endpoint → 動作確認 → commit）を踏襲
-5. **既存パターンは全て確立**：chain + basePath、eager load (`with: { ... }`)、ON CONFLICT DO NOTHING、optional / required auth、relationName、toAuthorJson / toArticleJson / toCommentJson、CHECK 制約は column 名直書き、重複検知は事前 SELECT
-6. dev server は `bun run --hot src/index.ts` で起動、構造変更（route 追加 / sub-app 追加）後は再起動必須
-7. このプロジェクトはコーチモードがデフォルト（明示されなくても closed question + 段階的に進める。memory 参照）
+5. **既存パターンは全て確立**：chain + basePath、eager load、optional / required auth、relationName、toAuthorJson / toArticleJson / toArticleListJson / toCommentJson、CHECK 制約は column 名直書き、重複検知は事前 SELECT、error は field-keyed、datetime ISO 化、orderBy stable
+6. **spec 準拠検証は Bruno**：`cd ~/dev/sample/real-world/specs/bruno && bru run --env local`（dev server 起動済みで）。149/149 緑が現状値、回帰検出に毎回走らせて良い
+7. dev server は `bun run --hot src/index.ts` で起動。**構造変更（route 追加 / sub-app 追加）や lib の transform 変更後は --hot だと反映漏れがあるので再起動推奨**
+8. このプロジェクトはコーチモードがデフォルト（明示されなくても closed question + 段階的に進める。memory 参照）
 
 ---
 
