@@ -1,5 +1,6 @@
 import type { Article, User } from "../db/schema";
 import type { ArticleResponse } from "../schemas/article";
+import { toAuthorJson } from "./author";
 
 export function toArticleJson(
   article: Article,
@@ -7,6 +8,7 @@ export function toArticleJson(
   tagList: string[] = [],
   favorited: boolean = false,
   favoritesCount: number = 0,
+  following: boolean = false,
 ): ArticleResponse["article"] {
   return {
     slug: article.slug,
@@ -18,11 +20,6 @@ export function toArticleJson(
     updatedAt: article.updatedAt,
     favorited,
     favoritesCount,
-    author: {
-      username: author.username,
-      bio: author.bio,
-      image: author.image,
-      following: false,
-    },
+    author: toAuthorJson(author, following),
   };
 }

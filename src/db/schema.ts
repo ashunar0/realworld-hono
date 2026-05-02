@@ -85,10 +85,27 @@ export const favorites = sqliteTable(
   }),
 );
 
+export const follows = sqliteTable(
+  "follows",
+  {
+    followerId: integer("follower_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    followingId: integer("following_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.followerId, t.followingId] }),
+  }),
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   articles: many(articles),
   comments: many(comments),
   favorites: many(favorites),
+  following: many(follows, { relationName: "userFollowing" }),
+  followers: many(follows, { relationName: "userFollowers" }),
 }));
 
 export const articlesRelations = relations(articles, ({ one, many }) => ({
@@ -127,6 +144,19 @@ export const favoritesRelations = relations(favorites, ({ one }) => ({
   }),
 }));
 
+export const followsRelations = relations(follows, ({ one }) => ({
+  follower: one(users, {
+    fields: [follows.followerId],
+    references: [users.id],
+    relationName: "userFollowing",
+  }),
+  following: one(users, {
+    fields: [follows.followingId],
+    references: [users.id],
+    relationName: "userFollowers",
+  }),
+}));
+
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {
     fields: [comments.authorId],
@@ -155,3 +185,6 @@ export type NewArticleTag = typeof articleTags.$inferInsert;
 
 export type Favorite = typeof favorites.$inferSelect;
 export type NewFavorite = typeof favorites.$inferInsert;
+
+export type Follow = typeof follows.$inferSelect;
+export type NewFollow = typeof follows.$inferInsert;

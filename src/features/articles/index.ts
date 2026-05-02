@@ -1,10 +1,18 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { articleTags, articles, favorites, tags, users } from "../../db/schema";
+import {
+  articleTags,
+  articles,
+  favorites,
+  follows,
+  tags,
+  users,
+} from "../../db/schema";
 import {
   articlesQuerySchema,
   createArticleSchema,
+  feedQuerySchema,
   updateArticleSchema,
   type ArticleResponse,
   type ArticlesResponse,
@@ -107,7 +115,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const list = await db.query.articles.findMany({
         where: whereClause,
         with: {
-          author: true,
+          author: { with: { followers: true } },
           articleTags: { with: { tag: true } },
           favoritedBy: true,
         },
@@ -130,6 +138,63 @@ const app = new Hono<{ Variables: AuthVariables }>()
             userId !== undefined &&
               a.favoritedBy.some((f) => f.userId === userId),
             a.favoritedBy.length,
+            userId !== undefined &&
+              a.author.followers.some((f) => f.followerId === userId),
+          ),
+        ),
+        articlesCount: totalRow?.total ?? 0,
+      } satisfies ArticlesResponse);
+    },
+  )
+  // 自分の feed GET /api/articles/feed
+  .get(
+    "/articles/feed",
+    authMiddleware,
+    validateQuery(feedQuerySchema),
+    async (c) => {
+      const userId = c.get("userId");
+      const { limit, offset } = c.req.valid("query");
+
+      const followingRows = await db
+        .select({ id: follows.followingId })
+        .from(follows)
+        .where(eq(follows.followerId, userId));
+
+      if (followingRows.length === 0) {
+        return c.json({
+          articles: [],
+          articlesCount: 0,
+        } satisfies ArticlesResponse);
+      }
+
+      const followingIds = followingRows.map((r) => r.id);
+
+      const list = await db.query.articles.findMany({
+        where: inArray(articles.authorId, followingIds),
+        with: {
+          author: { with: { followers: true } },
+          articleTags: { with: { tag: true } },
+          favoritedBy: true,
+        },
+        limit,
+        offset,
+        orderBy: desc(articles.createdAt),
+      });
+
+      const [totalRow] = await db
+        .select({ total: count() })
+        .from(articles)
+        .where(inArray(articles.authorId, followingIds));
+
+      return c.json({
+        articles: list.map((a) =>
+          toArticleJson(
+            a,
+            a.author,
+            a.articleTags.map((at) => at.tag.name),
+            a.favoritedBy.some((f) => f.userId === userId),
+            a.favoritedBy.length,
+            true,
           ),
         ),
         articlesCount: totalRow?.total ?? 0,
@@ -149,7 +214,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const existing = await db.query.articles.findFirst({
         where: eq(articles.slug, slug),
         with: {
-          author: true,
+          author: { with: { followers: true } },
           articleTags: { with: { tag: true } },
         },
       });
@@ -237,7 +302,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
       with: {
-        author: true,
+        author: { with: { followers: true } },
         articleTags: { with: { tag: true } },
       },
     });
@@ -271,6 +336,8 @@ const app = new Hono<{ Variables: AuthVariables }>()
         article.articleTags.map((at) => at.tag.name),
         favorited,
         countRow?.total ?? 0,
+        userId !== undefined &&
+          article.author.followers.some((f) => f.followerId === userId),
       ),
     } satisfies ArticleResponse);
   })
@@ -335,7 +402,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
       with: {
-        author: true,
+        author: { with: { followers: true } },
         articleTags: { with: { tag: true } },
       },
     });
@@ -360,6 +427,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         article.articleTags.map((at) => at.tag.name),
         true,
         countRow?.total ?? 0,
+        article.author.followers.some((f) => f.followerId === userId),
       ),
     } satisfies ArticleResponse);
   })
@@ -371,7 +439,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const article = await db.query.articles.findFirst({
       where: eq(articles.slug, slug),
       with: {
-        author: true,
+        author: { with: { followers: true } },
         articleTags: { with: { tag: true } },
       },
     });
@@ -400,6 +468,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         article.articleTags.map((at) => at.tag.name),
         false,
         countRow?.total ?? 0,
+        article.author.followers.some((f) => f.followerId === userId),
       ),
     } satisfies ArticleResponse);
   })

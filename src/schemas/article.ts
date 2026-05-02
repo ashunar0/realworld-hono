@@ -32,6 +32,13 @@ export const articlesQuerySchema = z.object({
 
 export type ArticlesQuery = z.infer<typeof articlesQuerySchema>;
 
+export const feedQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(50).default(20),
+  offset: z.coerce.number().int().nonnegative().default(0),
+});
+
+export type FeedQuery = z.infer<typeof feedQuerySchema>;
+
 export type ArticleResponse = {
   article: {
     slug: string;
