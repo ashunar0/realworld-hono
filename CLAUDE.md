@@ -30,19 +30,29 @@
 
 ```
 src/
-├── index.ts                    ← 全 endpoint
+├── index.ts                    ← トップ。chain で sub-app 統合、AppType export
+├── features/
+│   ├── users/
+│   │   └── index.ts            ← signup / login / GET PUT /user
+│   └── articles/
+│       ├── index.ts            ← Articles CRUD + comments を chain で route
+│       └── comments/
+│           └── index.ts        ← Comments（basePath で :slug 集約）
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
-│   └── schema.ts               ← users / articles + relations
+│   └── schema.ts               ← users / articles / comments + relations
 ├── middleware/
 │   ├── auth.ts                 ← JWT verify、c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
 ├── lib/
 │   ├── slug.ts                 ← title -> slug
-│   └── article.ts              ← toArticleJson(article, author)
+│   ├── article.ts              ← toArticleJson(article, author)
+│   ├── comment.ts              ← toCommentJson(comment, author)
+│   └── jwt.ts                  ← signToken
 └── schemas/
     ├── user.ts                 ← zod + types
-    └── article.ts              ← zod + types
+    ├── article.ts              ← zod + types
+    └── comment.ts              ← zod + types
 
 drizzle/                        ← 自動生成 migration
 scripts/migrate.ts              ← bun-native migration runner
@@ -57,7 +67,7 @@ bun run db:generate  # schema.ts → drizzle/000X_xxx.sql
 bun run db:migrate   # migration を DB に当てる
 ```
 
-## 進捗（2026-04-30 時点）
+## 進捗（2026-05-02 時点）
 
 | Step | 内容 | 状態 |
 |---|---|---|
@@ -68,37 +78,38 @@ bun run db:migrate   # migration を DB に当てる
 | 4 | `PUT /api/user` (partial update + dynamic SQL) | ✅ |
 | 4.5 | **Drizzle 化**（raw SQL → ORM、`as Type` 全廃） | ✅ |
 | 5 | Articles CRUD（5 endpoint）+ author JOIN + filter + pagination | ✅ |
-| **6** | **Comments（次回ここから）** | ⏳ |
-| 7 | Tags（多対多） | ⏳ |
+| 6 | Comments（3 endpoint）+ features/ 分割 | ✅ |
+| 6.5 | **chain pattern 全層適用**（basePath で :slug 解消、`AppType` export） | ✅ |
+| **7** | **Tags（多対多、次回ここから）** | ⏳ |
 | 8 | Favorites | ⏳ |
 | 9 | Profiles + Follow + Feed | ⏳ |
 
-## 次回 (Step 6: Comments) で実装するもの
+## 次回 (Step 7: Tags) で実装するもの
 
-RealWorld spec の comment endpoint：
+RealWorld spec の Tags：
 
 | endpoint | 認証 | 概要 |
 |---|---|---|
-| `POST /api/articles/:slug/comments` | 必須 | コメント投稿、author 込みで返す |
-| `GET /api/articles/:slug/comments` | 不要 | コメント一覧、author 込み |
-| `DELETE /api/articles/:slug/comments/:id` | 必須・所有者のみ | 削除 |
+| `GET /api/tags` | 不要 | 全タグ一覧 |
+| `POST /api/articles` | 必須 | request の `tagList` を受け取り紐付け |
+| `GET /api/articles` | 不要 | response に `tagList` を含める |
+| `GET /api/articles?tag=xxx` | 不要 | 特定 tag の article をフィルタ |
 
 ### 必要な作業
 
-1. `comments` テーブル schema 追加（`src/db/schema.ts`）
-   - id, body, articleId (FK), authorId (FK), createdAt, updatedAt
-   - relations: comment.author = one(users), comment.article = one(articles), articles.comments = many(comments)
+1. `tags` テーブル + `article_tags` 中間テーブル schema 追加（多対多）
+   - relations: article.tags = many(article_tags) → tags、tag.articles = many(article_tags) → articles
 2. migration 生成 + 適用
-3. `src/schemas/comment.ts`（zod schemas + CommentResponse 型）
-4. `src/lib/comment.ts`（toCommentJson helper、POST/GET で使い回す）
-5. 3 endpoint を `src/index.ts` に追加
+3. `src/features/tags/index.ts` を新規作成（chain pattern + `GET /tags`）
+4. articles の POST/PUT/GET handler で `tagList` を読み書き
+5. `articlesQuerySchema` に `tag` を追加、where に反映
 
 ### 学習ポイント
 
-- **nested resource**：URL は `/api/articles/:slug/comments`、article 経由で comment を扱う
-- **2層認可**：comment 所有者チェックは Step 5 と同じ pattern
-- **既存 article との関連**：comment が article に属する FK + relations
-- DELETE で 204 / GET でリスト + author JOIN（Step 5 の使い回し）
+- **多対多 relation**：Drizzle の中間テーブル + `relations` 双方向設定
+- **JOIN 戦略**：`with: { tags: { with: { tag: true } } }` で eager load
+- **`toArticleJson` の拡張**：tagList を Article ↔ Tag の名前配列に変換
+- 既存 Article CRUD への影響を最小化
 
 ## コーディング規約・確立済み pattern
 
@@ -149,7 +160,18 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 ### refactor
 
 - **rule of 3**：3回目の重複で抽出
-- 抽出済み: validateJson / validateQuery / authMiddleware / toArticleJson / generateSlug
+- 抽出済み: validateJson / validateQuery / authMiddleware / toArticleJson / toCommentJson / generateSlug / signToken
+
+### chain pattern（Step 6.5 で全層適用済み）
+
+- **全 sub-app は `new Hono().method(...)...` の chain 形式**で書く
+  - 戻り値を捨てない＝型情報が積み上がる
+  - `.route(prefix, subApp)` も chain に含める
+- `src/index.ts` トップでは `const routes = app.method(...).route(...)...` で別変数 → `export type AppType = typeof routes`
+- ネスト sub-app に親 prefix の `:param` を持たせるには **子側 `.basePath('/parent/:param/...')`** で集約する
+  - 親側のマウントは `.route('/', subApp)` で prefix 空
+  - これで子 handler 内 `c.req.param("param")` の型が `string` になり、narrow 不要
+- 新しい sub-app を追加するときも同じ pattern を踏襲
 
 ## ユーザー（あさひ）の学習スタイル
 
@@ -166,10 +188,11 @@ Request → authMiddleware（必要なら）→ validateJson/validateQuery（必
 
 1. このファイルを最初に読む
 2. `git log --oneline` で commit history 把握
-3. ユーザーは "Step 6 の Comments を作りたい" 状態で来るはず
-4. 「最初に schema 作って migration して、それから endpoint」という Step 5 の流れを踏襲
-5. **`with: { author: true }` は now standard pattern**、コメント endpoint でも自然に使う
-6. dev server は `bun run --hot src/index.ts` で起動、構造変更後は再起動
+3. ユーザーは "Step 7 の Tags（多対多）を作りたい" 状態で来るはず
+4. 「最初に schema 作って migration して、それから endpoint」という Step 5/6 の流れを踏襲
+5. **`with: { author: true }` は standard pattern**、tags も `with: { tags: { with: { tag: true } } }` で eager load
+6. **chain pattern + basePath は適用済み**。新しい `src/features/tags/` も chain で書き、`articles/index.ts` の `.route("/", tags)` でマウント（`/api` prefix は親 index.ts 側）
+7. dev server は `bun run --hot src/index.ts` で起動、構造変更後は再起動
 
 ---
 
