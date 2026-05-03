@@ -27,6 +27,7 @@ export async function followUser(username: string, viewerId: number) {
   // 対象ユーザーを取得
   const target = await userRepo.findByUsername(username);
   if (!target) return { kind: "not_found" as const };
+
   // 自分自身は不可
   if (viewerId === target.id) {
     return { kind: "cannot_follow_yourself" as const };
