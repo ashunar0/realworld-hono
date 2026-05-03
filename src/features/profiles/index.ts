@@ -17,10 +17,13 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
     // プロフィールを取得
     const result = await getProfile(username, userId);
+
+    // 各エラーケースに status code をマッピング
     if (result.kind === "not_found") {
       return c.json({ errors: { profile: ["not found"] } }, 404);
     }
 
+    // プロフィールデータを返す
     return c.json({ profile: result.profile } satisfies ProfileResponse);
   })
   // フォロー POST /api/profiles/:username/follow
@@ -31,6 +34,8 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
     // フォロー関係を作成
     const result = await followUser(username, userId);
+
+    // 各エラーケースに status code をマッピング
     if (result.kind === "not_found") {
       return c.json({ errors: { profile: ["not found"] } }, 404);
     }
@@ -38,6 +43,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       return c.json({ errors: { profile: ["cannot follow yourself"] } }, 422);
     }
 
+    // フォロー成功
     return c.json({ profile: result.profile } satisfies ProfileResponse);
   })
   // フォロー解除 DELETE /api/profiles/:username/follow
@@ -48,10 +54,13 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
     // フォロー関係を削除
     const result = await unfollowUser(username, userId);
+
+    // 各エラーケースに status code をマッピング
     if (result.kind === "not_found") {
       return c.json({ errors: { profile: ["not found"] } }, 404);
     }
 
+    // フォロー解除成功
     return c.json({ profile: result.profile } satisfies ProfileResponse);
   });
 
