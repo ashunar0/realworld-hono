@@ -209,62 +209,36 @@ const app = new Hono<{ Variables: AuthVariables }>()
     authMiddleware,
     validateJson(updateArticleSchema),
     async (c) => {
+      // 入力値を取得
       const userId = c.get("userId");
       const slug = c.req.param("slug");
       const { article: input } = c.req.valid("json");
 
+      // 記事データを取得
       const existing = await articleRepo.findBySlugWithRelations(slug);
+      // 記事が存在しない場合はエラーを返す
       if (!existing) {
         return c.json({ errors: { article: ["not found"] } }, 404);
       }
+      // 記事の作者がログイン中のユーザーではない場合はエラーを返す
       if (existing.authorId !== userId) {
         return c.json({ errors: { article: ["forbidden"] } }, 403);
       }
 
-      const [updated] = await db
-        .update(articles)
-        .set({
-          ...(input.title !== undefined && { title: input.title }),
-          ...(input.description !== undefined && {
-            description: input.description,
-          }),
-          ...(input.body !== undefined && { body: input.body }),
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(articles.id, existing.id))
-        .returning();
-      if (!updated) throw new Error("failed to update article");
+      // 記事を更新
+      const updated = await articleRepo.update(existing.id, input);
 
+      // タグリストを更新
       let resultTagList: string[];
       if (input.tagList !== undefined) {
         const tagList = [...new Set(input.tagList)];
-
-        await db
-          .delete(articleTags)
-          .where(eq(articleTags.articleId, existing.id));
-
-        if (tagList.length > 0) {
-          await db
-            .insert(tags)
-            .values(tagList.map((name) => ({ name })))
-            .onConflictDoNothing();
-
-          const tagRows = await db
-            .select()
-            .from(tags)
-            .where(inArray(tags.name, tagList));
-
-          await db
-            .insert(articleTags)
-            .values(
-              tagRows.map((t) => ({ articleId: existing.id, tagId: t.id })),
-            );
-        }
+        await articleRepo.replaceArticleTags(existing.id, tagList);
         resultTagList = tagList;
       } else {
         resultTagList = existing.articleTags.map((at) => at.tag.name);
       }
 
+      // 記事データを返す
       return c.json({
         article: toArticleJson(updated, existing.author, resultTagList),
       } satisfies ArticleResponse);
@@ -313,13 +287,18 @@ const app = new Hono<{ Variables: AuthVariables }>()
     authMiddleware,
     validateJson(createArticleSchema),
     async (c) => {
+      // 入力値を取得
       const userId = c.get("userId");
       const { article: input } = c.req.valid("json");
 
+      // 記事のスラグを生成
       const slug = generateSlug(input.title);
       const tagList = [...new Set(input.tagList ?? [])];
 
+      // 現在時刻を取得
       const now = new Date().toISOString();
+
+      // 記事を作成
       const [created] = await db
         .insert(articles)
         .values({
@@ -334,6 +313,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         .returning();
       if (!created) throw new Error("failed to create article");
 
+      // タグを作成
       if (tagList.length > 0) {
         await db
           .insert(tags)
@@ -350,12 +330,14 @@ const app = new Hono<{ Variables: AuthVariables }>()
           .values(tagRows.map((t) => ({ articleId: created.id, tagId: t.id })));
       }
 
+      // 作者データを取得
       const [author] = await db
         .select()
         .from(users)
         .where(eq(users.id, userId));
       if (!author) throw new Error("author not found");
 
+      // 記事データを返す
       return c.json(
         {
           article: toArticleJson(created, author, tagList),

@@ -1,6 +1,6 @@
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
-import { articles, favorites } from "../../db/schema";
+import { articleTags, articles, favorites, tags } from "../../db/schema";
 
 export const articleRepo = {
   // 記事詳細表示に必要な author（+ followers）と articleTags（+ tag）を eager load
@@ -35,5 +35,44 @@ export const articleRepo = {
         ),
       );
     return row !== undefined;
+  },
+
+  // 部分更新。渡された field のみ反映、updatedAt は常に ISO で更新
+  async update(
+    id: number,
+    fields: { title?: string; description?: string; body?: string },
+  ) {
+    const [row] = await db
+      .update(articles)
+      .set({
+        ...(fields.title !== undefined && { title: fields.title }),
+        ...(fields.description !== undefined && {
+          description: fields.description,
+        }),
+        ...(fields.body !== undefined && { body: fields.body }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(articles.id, id))
+      .returning();
+    if (!row) throw new Error("failed to update article");
+    return row;
+  },
+
+  // tags を全置換。delete → upsert（onConflictDoNothing）→ link を集約
+  async replaceArticleTags(articleId: number, tagList: string[]) {
+    await db.delete(articleTags).where(eq(articleTags.articleId, articleId));
+    if (tagList.length === 0) return;
+
+    await db
+      .insert(tags)
+      .values(tagList.map((name) => ({ name })))
+      .onConflictDoNothing();
+    const tagRows = await db
+      .select()
+      .from(tags)
+      .where(inArray(tags.name, tagList));
+    await db
+      .insert(articleTags)
+      .values(tagRows.map((t) => ({ articleId, tagId: t.id })));
   },
 };
