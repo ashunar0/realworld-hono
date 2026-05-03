@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db";
 import { follows, users } from "../../db/schema";
 
@@ -30,5 +30,25 @@ export const userRepo = {
       .from(follows)
       .where(eq(follows.followerId, userId));
     return rows.map((r) => r.id);
+  },
+
+  // フォロー関係を作成。重複は無視
+  async createFollow(followerId: number, followingId: number) {
+    await db
+      .insert(follows)
+      .values({ followerId, followingId })
+      .onConflictDoNothing();
+  },
+
+  // フォロー関係を削除
+  async deleteFollow(followerId: number, followingId: number) {
+    await db
+      .delete(follows)
+      .where(
+        and(
+          eq(follows.followerId, followerId),
+          eq(follows.followingId, followingId),
+        ),
+      );
   },
 };
