@@ -11,6 +11,7 @@ import {
 import { authMiddleware, type AuthVariables } from "../../middleware/auth";
 import { validateJson } from "../../middleware/validator";
 import { signToken } from "../../lib/jwt";
+import { loginUser, signupUser } from "./service";
 
 const normalizeNullable = (
   v: string | null | undefined,
@@ -20,83 +21,37 @@ const app = new Hono<{ Variables: AuthVariables }>()
   // 新規登録 POST /api/users
   .post("/users", validateJson(createUserSchema), async (c) => {
     // 入力値を取得
-    const { username, email, password } = c.req.valid("json").user;
+    const input = c.req.valid("json").user;
 
-    // メールアドレスが既に使用されているかを確認
-    const existingByEmail = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
-    if (existingByEmail) {
+    // ユーザーを作成
+    const result = await signupUser(input);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "email_taken") {
       return c.json({ errors: { email: ["has already been taken"] } }, 409);
     }
-
-    // ユーザー名が既に使用されているかを確認
-    const existingByUsername = await db.query.users.findFirst({
-      where: eq(users.username, username),
-    });
-    if (existingByUsername) {
+    if (result.kind === "username_taken") {
       return c.json({ errors: { username: ["has already been taken"] } }, 409);
     }
 
-    // パスワードをハッシュ化
-    const passwordHash = await Bun.password.hash(password);
-
-    // 現在時刻を取得
-    const now = new Date().toISOString();
-
-    // ユーザーを作成
-    const [row] = await db
-      .insert(users)
-      .values({ username, email, passwordHash, createdAt: now, updatedAt: now })
-      .returning();
-    if (!row) throw new Error("failed to insert user");
-
-    // トークンを生成
-    const token = await signToken(row.id);
-
-    // ユーザー情報を返す
-    return c.json(
-      {
-        user: {
-          email: row.email,
-          token,
-          username: row.username,
-          bio: row.bio,
-          image: row.image,
-        },
-      } satisfies AuthUserResponse,
-      201,
-    );
+    // 登録成功
+    return c.json({ user: result.user } satisfies AuthUserResponse, 201);
   })
   // ログイン POST /api/users/login
   .post("/users/login", validateJson(loginUserSchema), async (c) => {
     // 入力値を取得
-    const { email, password } = c.req.valid("json").user;
+    const input = c.req.valid("json").user;
 
-    // ログイン失敗時のエラーを返す
-    const fail = () => c.json({ errors: { credentials: ["invalid"] } }, 401);
+    // ログイン
+    const result = await loginUser(input);
 
-    // ユーザーを取得
-    const [row] = await db.select().from(users).where(eq(users.email, email));
-    if (!row) return fail();
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "invalid_credentials") {
+      return c.json({ errors: { credentials: ["invalid"] } }, 401);
+    }
 
-    // パスワードを検証
-    const ok = await Bun.password.verify(password, row.passwordHash);
-    if (!ok) return fail();
-
-    // トークンを生成
-    const token = await signToken(row.id);
-
-    // ユーザー情報を返す
-    return c.json({
-      user: {
-        email: row.email,
-        token,
-        username: row.username,
-        bio: row.bio,
-        image: row.image,
-      },
-    } satisfies AuthUserResponse);
+    // ログイン成功
+    return c.json({ user: result.user } satisfies AuthUserResponse);
   })
   // ユーザー情報取得 GET /api/user
   .get("/user", authMiddleware, async (c) => {

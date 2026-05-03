@@ -15,6 +15,28 @@ export const userRepo = {
     });
   },
 
+  // email から user を取得。存在しなければ undefined
+  findByEmail(email: string) {
+    return db.query.users.findFirst({
+      where: eq(users.email, email),
+    });
+  },
+
+  // 新規ユーザー作成。createdAt/updatedAt は内部で ISO 生成
+  async create(fields: {
+    username: string;
+    email: string;
+    passwordHash: string;
+  }) {
+    const now = new Date().toISOString();
+    const [row] = await db
+      .insert(users)
+      .values({ ...fields, createdAt: now, updatedAt: now })
+      .returning();
+    if (!row) throw new Error("failed to create user");
+    return row;
+  },
+
   // プロフィール表示用に followers を eager load した user を取得
   findByUsernameWithFollowers(username: string) {
     return db.query.users.findFirst({
