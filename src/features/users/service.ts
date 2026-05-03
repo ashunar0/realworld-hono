@@ -1,5 +1,5 @@
 import { signToken } from "../../lib/jwt";
-import { toAuthUserJson } from "../../lib/user";
+import { toAuthUserJson } from "./presenter";
 import type {
   CreateUserRequest,
   LoginUserRequest,

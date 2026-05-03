@@ -1,4 +1,4 @@
-import { toCommentJson } from "../../../lib/comment";
+import { toCommentJson } from "./presenter";
 import type { CreateCommentRequest } from "../../../schemas/comment";
 import { userRepo } from "../../users/repository";
 import { articleRepo } from "../repository";

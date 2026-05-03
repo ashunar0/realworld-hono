@@ -1,5 +1,5 @@
-import type { User } from "../db/schema";
-import type { AuthUserResponse } from "../schemas/user";
+import type { User } from "../../db/schema";
+import type { AuthUserResponse } from "../../schemas/user";
 
 export function toAuthUserJson(
   user: User,

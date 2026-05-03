@@ -1,7 +1,7 @@
 import { type SQL, and, eq, inArray } from "drizzle-orm";
 import { articles } from "../../db/schema";
-import { generateSlug } from "../../lib/slug";
-import { toArticleJson, toArticleListJson } from "../../lib/article";
+import { generateSlug } from "./slug";
+import { toArticleJson, toArticleListJson } from "./presenter";
 import { isFollowing } from "../../lib/author";
 import type {
   ArticlesQuery,

@@ -1,6 +1,6 @@
-import type { Article, User } from "../db/schema";
-import type { ArticleListItem, ArticleResponse } from "../schemas/article";
-import { toAuthorJson } from "./author";
+import type { Article, User } from "../../db/schema";
+import type { ArticleListItem, ArticleResponse } from "../../schemas/article";
+import { toAuthorJson } from "../../lib/author";
 
 const toIso = (s: string): string =>
   new Date(s.replace(" ", "T") + (s.endsWith("Z") ? "" : "Z")).toISOString();

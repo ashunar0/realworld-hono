@@ -1,5 +1,5 @@
-import type { Comment, User } from "../db/schema";
-import type { CommentResponse } from "../schemas/comment";
+import type { Comment, User } from "../../../db/schema";
+import type { CommentResponse } from "../../../schemas/comment";
 
 const toIso = (s: string): string =>
   new Date(s.replace(" ", "T") + (s.endsWith("Z") ? "" : "Z")).toISOString();
