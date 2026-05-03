@@ -212,13 +212,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const slug = c.req.param("slug");
       const { article: input } = c.req.valid("json");
 
-      const existing = await db.query.articles.findFirst({
-        where: eq(articles.slug, slug),
-        with: {
-          author: { with: { followers: true } },
-          articleTags: { with: { tag: true } },
-        },
-      });
+      const existing = await articleRepo.findBySlugWithRelations(slug);
       if (!existing) {
         return c.json({ errors: { article: ["not found"] } }, 404);
       }
@@ -390,13 +384,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-      with: {
-        author: { with: { followers: true } },
-        articleTags: { with: { tag: true } },
-      },
-    });
+    const article = await articleRepo.findBySlugWithRelations(slug);
     if (!article) {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
@@ -427,13 +415,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-      with: {
-        author: { with: { followers: true } },
-        articleTags: { with: { tag: true } },
-      },
-    });
+    const article = await articleRepo.findBySlugWithRelations(slug);
     if (!article) {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
