@@ -1,7 +1,4 @@
 import { Hono } from "hono";
-import { desc, eq } from "drizzle-orm";
-import { db } from "../../../db";
-import { articles, comments } from "../../../db/schema";
 import {
   createCommentSchema,
   type CommentResponse,
@@ -9,72 +6,47 @@ import {
 } from "../../../schemas/comment";
 import { authMiddleware, type AuthVariables } from "../../../middleware/auth";
 import { validateJson } from "../../../middleware/validator";
-import { toCommentJson } from "../../../lib/comment";
+import { createComment, deleteComment, listComments } from "./service";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   .basePath("/articles/:slug/comments")
   // コメント投稿 POST /api/articles/:slug/comments
   .post("/", authMiddleware, validateJson(createCommentSchema), async (c) => {
+    // 入力値を取得
     const userId = c.get("userId");
     const slug = c.req.param("slug");
     const { comment: input } = c.req.valid("json");
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-    });
-    if (!article) {
+    // コメントを作成
+    const result = await createComment(slug, userId, input);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "article_not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    const now = new Date().toISOString();
-    const [created] = await db
-      .insert(comments)
-      .values({
-        body: input.body,
-        articleId: article.id,
-        authorId: userId,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning();
-    if (!created) throw new Error("failed to create comment");
-
-    const createdWithAuthor = await db.query.comments.findFirst({
-      where: eq(comments.id, created.id),
-      with: { author: true },
-    });
-    if (!createdWithAuthor) throw new Error("comment not found after create");
-
-    return c.json(
-      {
-        comment: toCommentJson(createdWithAuthor, createdWithAuthor.author),
-      } satisfies CommentResponse,
-      201,
-    );
+    // 投稿成功
+    return c.json({ comment: result.comment } satisfies CommentResponse, 201);
   })
   // コメント一覧 GET /api/articles/:slug/comments
   .get("/", async (c) => {
+    // 入力値を取得
     const slug = c.req.param("slug");
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-    });
-    if (!article) {
+    // コメント一覧を取得
+    const result = await listComments(slug);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "article_not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    const list = await db.query.comments.findMany({
-      where: eq(comments.articleId, article.id),
-      with: { author: true },
-      orderBy: [desc(comments.createdAt), desc(comments.id)],
-    });
-
-    return c.json({
-      comments: list.map((comment) => toCommentJson(comment, comment.author)),
-    } satisfies CommentsResponse);
+    // 一覧を返す
+    return c.json({ comments: result.comments } satisfies CommentsResponse);
   })
   // コメント削除 DELETE /api/articles/:slug/comments/:id
   .delete("/:id", authMiddleware, async (c) => {
+    // 入力値を取得
     const userId = c.get("userId");
     const slug = c.req.param("slug");
     const idParam = c.req.param("id");
@@ -83,31 +55,21 @@ const app = new Hono<{ Variables: AuthVariables }>()
       return c.json({ errors: { id: ["invalid"] } }, 422);
     }
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-    });
-    if (!article) {
+    // コメントを削除
+    const result = await deleteComment(slug, commentId, userId);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "article_not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
-
-    const [existing] = await db
-      .select()
-      .from(comments)
-      .where(eq(comments.id, commentId));
-    if (!existing) {
+    if (result.kind === "comment_not_found") {
       return c.json({ errors: { comment: ["not found"] } }, 404);
     }
-
-    if (existing.articleId !== article.id) {
-      return c.json({ errors: { comment: ["not found"] } }, 404);
-    }
-
-    if (existing.authorId !== userId) {
+    if (result.kind === "forbidden") {
       return c.json({ errors: { comment: ["forbidden"] } }, 403);
     }
 
-    await db.delete(comments).where(eq(comments.id, existing.id));
-
+    // 削除成功
     return c.body(null, 204);
   });
 
