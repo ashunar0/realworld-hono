@@ -27,6 +27,7 @@ import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
 import { articleRepo } from "./repository";
+import { getArticleBySlug } from "./service";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
@@ -296,31 +297,15 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
 
     // 記事データを取得
-    const article = await articleRepo.findBySlugWithRelations(slug);
-    if (!article) {
+    const result = await getArticleBySlug(slug, userId);
+
+    // 記事が存在しない場合はエラーを返す
+    if (result.kind === "not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    // 記事のいいね数を取得
-    const favoritesCount = await articleRepo.countFavorites(article.id);
-
-    // 自身がいいねしているかを判定（ログイン中のみ DB 確認）
-    const favorited =
-      userId !== undefined
-        ? await articleRepo.isFavoritedBy(article.id, userId)
-        : false;
-
-    return c.json({
-      article: toArticleJson(
-        article,
-        article.author,
-        article.articleTags.map((at) => at.tag.name),
-        favorited,
-        favoritesCount,
-        userId !== undefined &&
-          article.author.followers.some((f) => f.followerId === userId),
-      ),
-    } satisfies ArticleResponse);
+    // 記事データを返す
+    return c.json({ article: result.article } satisfies ArticleResponse);
   })
   // 記事作成 POST /api/articles
   .post(
@@ -381,24 +366,29 @@ const app = new Hono<{ Variables: AuthVariables }>()
   )
   // 記事 favorite POST /api/articles/:slug/favorite
   .post("/articles/:slug/favorite", authMiddleware, async (c) => {
+    // 入力値を取得
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
+    // 記事データを取得
     const article = await articleRepo.findBySlugWithRelations(slug);
     if (!article) {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
+    // 記事をいいねする
     await db
       .insert(favorites)
       .values({ userId, articleId: article.id })
       .onConflictDoNothing();
 
+    // 記事のいいね数を取得
     const [countRow] = await db
       .select({ total: count() })
       .from(favorites)
       .where(eq(favorites.articleId, article.id));
 
+    // 記事データを返す
     return c.json({
       article: toArticleJson(
         article,
@@ -412,25 +402,30 @@ const app = new Hono<{ Variables: AuthVariables }>()
   })
   // 記事 favorite 解除 DELETE /api/articles/:slug/favorite
   .delete("/articles/:slug/favorite", authMiddleware, async (c) => {
+    // 入力値を取得
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
+    // 記事データを取得
     const article = await articleRepo.findBySlugWithRelations(slug);
     if (!article) {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
+    // 記事のいいねを解除
     await db
       .delete(favorites)
       .where(
         and(eq(favorites.userId, userId), eq(favorites.articleId, article.id)),
       );
 
+    // 記事のいいね数を取得
     const [countRow] = await db
       .select({ total: count() })
       .from(favorites)
       .where(eq(favorites.articleId, article.id));
 
+    // 記事データを返す
     return c.json({
       article: toArticleJson(
         article,
