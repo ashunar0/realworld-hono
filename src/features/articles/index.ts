@@ -26,6 +26,7 @@ import { validateJson, validateQuery } from "../../middleware/validator";
 import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
+import { articleRepo } from "./repository";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
@@ -296,38 +297,24 @@ const app = new Hono<{ Variables: AuthVariables }>()
   })
   // 記事取得 GET /api/articles/:slug
   .get("/articles/:slug", optionalAuthMiddleware, async (c) => {
+    // 入力値を取得
     const slug = c.req.param("slug");
     const userId = c.get("userId");
 
-    const article = await db.query.articles.findFirst({
-      where: eq(articles.slug, slug),
-      with: {
-        author: { with: { followers: true } },
-        articleTags: { with: { tag: true } },
-      },
-    });
+    // 記事データを取得
+    const article = await articleRepo.findBySlugWithRelations(slug);
     if (!article) {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    const [countRow] = await db
-      .select({ total: count() })
-      .from(favorites)
-      .where(eq(favorites.articleId, article.id));
+    // 記事のいいね数を取得
+    const favoritesCount = await articleRepo.countFavorites(article.id);
 
-    let favorited = false;
-    if (userId !== undefined) {
-      const [own] = await db
-        .select()
-        .from(favorites)
-        .where(
-          and(
-            eq(favorites.userId, userId),
-            eq(favorites.articleId, article.id),
-          ),
-        );
-      favorited = own !== undefined;
-    }
+    // 自身がいいねしているかを判定（ログイン中のみ DB 確認）
+    const favorited =
+      userId !== undefined
+        ? await articleRepo.isFavoritedBy(article.id, userId)
+        : false;
 
     return c.json({
       article: toArticleJson(
@@ -335,7 +322,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
         article.author,
         article.articleTags.map((at) => at.tag.name),
         favorited,
-        countRow?.total ?? 0,
+        favoritesCount,
         userId !== undefined &&
           article.author.followers.some((f) => f.followerId === userId),
       ),
@@ -381,9 +368,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
 
         await db
           .insert(articleTags)
-          .values(
-            tagRows.map((t) => ({ articleId: created.id, tagId: t.id })),
-          );
+          .values(tagRows.map((t) => ({ articleId: created.id, tagId: t.id })));
       }
 
       const [author] = await db
@@ -456,10 +441,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
     await db
       .delete(favorites)
       .where(
-        and(
-          eq(favorites.userId, userId),
-          eq(favorites.articleId, article.id),
-        ),
+        and(eq(favorites.userId, userId), eq(favorites.articleId, article.id)),
       );
 
     const [countRow] = await db
