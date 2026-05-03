@@ -27,7 +27,7 @@ import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
 import { articleRepo } from "./repository";
-import { getArticleBySlug } from "./service";
+import { getArticleBySlug, updateArticle } from "./service";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
@@ -214,34 +214,19 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const slug = c.req.param("slug");
       const { article: input } = c.req.valid("json");
 
-      // 記事データを取得
-      const existing = await articleRepo.findBySlugWithRelations(slug);
-      // 記事が存在しない場合はエラーを返す
-      if (!existing) {
+      // 記事を更新
+      const result = await updateArticle(slug, userId, input);
+
+      // 各エラーケースに status code をマッピング
+      if (result.kind === "not_found") {
         return c.json({ errors: { article: ["not found"] } }, 404);
       }
-      // 記事の作者がログイン中のユーザーではない場合はエラーを返す
-      if (existing.authorId !== userId) {
+      if (result.kind === "forbidden") {
         return c.json({ errors: { article: ["forbidden"] } }, 403);
       }
 
-      // 記事を更新
-      const updated = await articleRepo.update(existing.id, input);
-
-      // タグリストを更新
-      let resultTagList: string[];
-      if (input.tagList !== undefined) {
-        const tagList = [...new Set(input.tagList)];
-        await articleRepo.replaceArticleTags(existing.id, tagList);
-        resultTagList = tagList;
-      } else {
-        resultTagList = existing.articleTags.map((at) => at.tag.name);
-      }
-
       // 記事データを返す
-      return c.json({
-        article: toArticleJson(updated, existing.author, resultTagList),
-      } satisfies ArticleResponse);
+      return c.json({ article: result.article } satisfies ArticleResponse);
     },
   )
   // 記事削除 DELETE /api/articles/:slug
