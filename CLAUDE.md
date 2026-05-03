@@ -52,7 +52,8 @@ src/
 │       ├── index.ts            ← route 層（signup / login / GET PUT /user）
 │       ├── service.ts          ← signupUser / loginUser / getCurrentUser / updateUser
 │       ├── repository.ts       ← userRepo: 全 user / follows DB 操作（feature 越境利用あり）
-│       └── presenter.ts        ← toAuthUserJson（Step 12-B で lib から移動）
+│       ├── presenter.ts        ← toAuthUserJson（Step 12-B で lib から移動）
+│       └── jwt.ts              ← signToken（Step 12-C で lib から移動、users 専用）
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
 │   └── schema.ts               ← users / articles / comments / tags / article_tags / favorites / follows + relations
@@ -60,8 +61,7 @@ src/
 │   ├── auth.ts                 ← authMiddleware（必須）/ optionalAuthMiddleware（任意）+ c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
 ├── lib/                        ← 真の共有 helper のみ（feature 横断で実際に使われるもの）
-│   ├── author.ts               ← toAuthorJson + isFollowing。articles + profiles の両方が使う真の共有
-│   └── jwt.ts                  ← signToken。⚠️ middleware/auth.ts と JWT_SECRET 重複、auth レイヤー統合 task あり
+│   └── author.ts               ← toAuthorJson + isFollowing。articles + profiles の両方が使う真の共有
 └── schemas/
     ├── user.ts                 ← zod + types
     ├── article.ts              ← zod + types（articlesQuerySchema / feedQuerySchema 含む）
@@ -101,7 +101,8 @@ bun run db:migrate   # migration を DB に当てる
 | 11-B | **Bruno collection で spec 100% 準拠**（149/149 緑） | ✅ |
 | 12-A | **articles feature の 4 層分離**（route / service / repository / presenter）8 endpoint × 10 commits、`articles/index.ts` 484 → 180 行、Bruno 149/149 緑維持。userRepo も新設（feature 越境の作法確立） | ✅ |
 | 12-B | **comments / profiles / users feature の 4 層分離 + lib 再配置**（8 commits）。`isFollowing` helper 抽出（articles/profiles 共有）、`toAuthUserJson` presenter 新設、handler 行数: profiles 95→67 / comments 114→76 / users 179→93。`lib/{article,comment,slug,user}.ts` を feature 配下へ移動、`lib/{author,jwt}.ts` のみ残す。Bruno 149/149 緑維持 | ✅ |
-| **次** | **auth レイヤー統合（lib/jwt.ts と middleware/auth.ts の secret 重複解消）or bun test 導入** | ⏳ |
+| 12-C | **`lib/jwt.ts` を `features/users/jwt.ts` へ move**。signToken は users 専用（4 箇所で使用、middleware からは未使用）と判明 → Step 12-B の lib 配置基準に従い feature 配下へ。`middleware/auth.ts` は self-contained のため触らず、env 読み出し 1 行の "重複" は許容（DRY 違反ではなく独立参照）。Bruno 149/149 緑維持 | ✅ |
+| **次** | **bun test 導入（型紙だけ、ボトムアップで感覚掴む）→ Hono + Inertia + React へ進む** | ⏳ |
 
 ## Step 12-B で身についたこと（直近サマリ）
 
@@ -157,12 +158,14 @@ bun run db:migrate   # migration を DB に当てる
 - これ以下に削ると Hono 公式 NG の controller 化に踏み込む
 - 4 feature 全部でこの形に揃った → reference として読みやすい
 
-### `lib/jwt.ts` ↔ `middleware/auth.ts` の secret 重複（次の宿題）
+### `lib/jwt.ts` ↔ `middleware/auth.ts` の secret 重複（Step 12-C で解消）
 
-- `lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) が **同じ `Bun.env.JWT_SECRET ?? "dev-fallback"` を 2 箇所に重複**
-- `lib/jwt.ts` は users feature 専用じゃなく **auth ドメイン**の概念
-- 統合案: `auth/` ディレクトリを切って sign / verify / middleware を 1 箇所に集約。または `middleware/auth.ts` 内に統合
-- ★ 次回 task：「auth レイヤー統合」で扱う
+- 当初は「`signToken` と `verify` で `JWT_SECRET` を 2 箇所重複 → auth ドメインに統合」と考えた
+- **実態を grep して再評価**：`signToken` は `features/users/service.ts` の **4 箇所のみ**（signup / login / getCurrentUser / updateUser）、middleware では未使用
+- → `signToken` は **users feature 専用**、Step 12-B の lib 配置基準（"1 feature でしか使わない → feature 配下"）に該当
+- → **`features/users/jwt.ts` に move**、`middleware/auth.ts` は self-contained で触らず
+- env 読み出し（`Bun.env.JWT_SECRET ?? "dev-fallback"` 1 行）の重複は **DRY 違反じゃなく独立参照**として許容
+- ★ 教訓：「重複してるから集約」と短絡せず、**実際の使用箇所を grep で確認**してから配置を決める。"重複行数 = 統合の justifier" は弱い signal、"使用 feature の数" の方が強い
 
 ### 既知のスタイル（再確認）
 
@@ -293,18 +296,22 @@ handler に残るのは 5 つの仕事のみ（これ以上削ると Hono 公式
 - **`ne(users.id, userId)` で「自分以外」を除外**：PUT /user で自分の email/username を維持する場合に誤検知しないため。
 - **password には `.trim()` を入れない**：エントロピー保持のため。ユーザーが意図したスペース付き password を尊重（NIST 800-63B が passphrase 推奨）。identifier（email/username）と content（title/body）は trim する。
 
-## 次の方向（Step 12-B 後）
+## 次の方向（Step 12-C 後）
 
-全 feature 4 層分離 + lib 再配置 完了。直近の候補：
+backend hono は一区切り。直近の方針：
+
+- **次のセッション**: bun test を **型紙だけ** 書いて感覚掴む（ボトムアップ、ガチ網羅しない。Bruno で spec 準拠は既に取れてる）
+- **その次**: **Hono + Inertia + React の monorepo を別ディレクトリで開始**（主軸）。Hono + Inertia adapter が出たての旬、あさひの SNS 発信で反応もらえてる路線、Hono 作者の認知獲得が外向きゴール
+- **従軸**: React 単独 SPA（`frontend/react/`）はいつでもやれる長期素材として後回し
 
 | 案 | 内容 | コメント |
 |---|---|---|
-| **★ 次の優先候補** | **auth レイヤー統合**：`lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) で `Bun.env.JWT_SECRET` を 2 箇所に重複 → `auth/` ディレクトリに集約 or middleware 内統合 | Step 12-B で発見した宿題。小〜中規模 |
-| **★ 次の優先候補** | **bun test で internal unit test** | service / repository が pure になったので test しやすい。tagged union variant ごとのケースを 1 endpoint 試して感触確認 |
-| D | frontend integration | 親リポの frontend と E2E |
-| F | 別 FW で書き直し（比較） | layered なので比較しやすい |
-| G | 比較メトリクス計測（行数、起動時間、bundle size、応答時間） | 比較プロジェクト追加前に |
-| 微調整 | `kind → status` の helper 化（4 endpoint で `if (result.kind === ...)` 繰り返し）、`factory.createHandlers` で middleware DRY、`hc<AppType>` で frontend 用 client | 旨味少、後回し |
+| **★ 直近** | **bun test 型紙作り** | service 1 つで tagged union variant を触って bun test の感触掴む。30〜60 min |
+| **★ 主軸** | **Hono + Inertia + React** monorepo を `~/dev/sample/real-world/fullstack/hono-inertia-react/` 等で開始 | 旬がある。Hono Inertia adapter + React で SPR/SPA。Vue / Preact も実験余地あり |
+| 従軸 | React 単独 SPA を `frontend/react/` で | 純粋な React の流儀比較。常温素材なので焦らない |
+| D | 別 backend FW で書き直し（Rails / Elysia / Fastify など） | layered なので比較しやすい |
+| G | 比較メトリクス計測（行数、起動時間、bundle size、応答時間） | 比較プロジェクト追加後に |
+| 微調整 | `kind → status` の helper 化、`factory.createHandlers` で middleware DRY、`hc<AppType>` で frontend 用 client | 旨味少、後回し |
 
 ## コーディング規約・確立済み pattern
 
@@ -399,9 +406,10 @@ RealWorld spec 形式（**field-keyed**、Step 11-B で確定）：
    964ef00 refactor: isFollowing helper を lib/author に抽出
    ```
 3. **全 4 feature が 4 層分離済み + lib 再配置済み**の完成状態で来るはず。articles に加え、profiles / comments / users も reference として読める
-4. 次の優先候補は 2 つ（あさひに選ばせる、または明示の指示を待つ）：
-   - **A. auth レイヤー統合**: `lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) で `Bun.env.JWT_SECRET` を 2 箇所重複 → `auth/` ディレクトリに統合 or middleware 内統合
-   - **B. bun test 導入**: service / repository が pure になったので unit test しやすい。tagged union variant の網羅から始めると効果的
+4. backend hono は **Step 12-C で一区切り**。次の方向は 2 段階で確定済み：
+   - **A. 直近 (backend 内)**: bun test を **型紙だけ** 書いて感覚を掴む（service 1 つで tagged union variant を試す程度、ガチ網羅しない。Bruno で spec 準拠は既に取れてる）。30〜60 min 想定
+   - **B. その次 (主軸)**: backend hono は塩漬け、**Hono + Inertia + React の monorepo を別ディレクトリで開始**（`~/dev/sample/real-world/fullstack/hono-inertia-react/` 等）。あさひの SNS 発信路線、Hono 作者の認知獲得が外向きゴール
+   - **C. 従軸 (後回し OK)**: React 単独 SPA を `frontend/react/` で。純粋な React の流儀比較、常温素材
 5. 新 feature を将来追加する時の refactor 流れ（articles / Step 12-B で確立済み）：
    - **Stage A: repository に DB 操作を集約**（feature 内に `repository.ts` を新設、必要なら別 feature の repo を import）
    - **Stage B: service に orchestration を集約**（feature 内に `service.ts`、tagged union で error variant 表現、list 系は直返し）
