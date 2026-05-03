@@ -15,6 +15,14 @@ export const userRepo = {
     });
   },
 
+  // プロフィール表示用に followers を eager load した user を取得
+  findByUsernameWithFollowers(username: string) {
+    return db.query.users.findFirst({
+      where: eq(users.username, username),
+      with: { followers: true },
+    });
+  },
+
   // この user がフォローしている user の ID 一覧
   async findFollowingIds(userId: number) {
     const rows = await db
