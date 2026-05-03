@@ -2,6 +2,7 @@ import { type SQL, and, eq, inArray } from "drizzle-orm";
 import { articles } from "../../db/schema";
 import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
+import { isFollowing } from "../../lib/author";
 import type {
   ArticlesQuery,
   ArticlesResponse,
@@ -29,9 +30,7 @@ async function presentArticleWithViewerContext(
   // いいね数を取得
   const favoritesCount = await articleRepo.countFavorites(article.id);
   // 自身がフォローしているかを判定
-  const following =
-    viewerId !== undefined &&
-    article.author.followers.some((f) => f.followerId === viewerId);
+  const following = isFollowing(article.author, viewerId);
 
   return toArticleJson(
     article,
@@ -52,9 +51,7 @@ function presentArticleListItem(
     viewerId !== undefined &&
     article.favoritedBy.some((f) => f.userId === viewerId);
   const favoritesCount = article.favoritedBy.length;
-  const following =
-    viewerId !== undefined &&
-    article.author.followers.some((f) => f.followerId === viewerId);
+  const following = isFollowing(article.author, viewerId);
 
   return toArticleListJson(
     article,
