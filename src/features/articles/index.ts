@@ -29,6 +29,7 @@ import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
 import {
   createArticle,
+  deleteArticle,
   getArticleBySlug,
   updateArticle,
 } from "./service";
@@ -235,22 +236,22 @@ const app = new Hono<{ Variables: AuthVariables }>()
   )
   // 記事削除 DELETE /api/articles/:slug
   .delete("/articles/:slug", authMiddleware, async (c) => {
+    // 入力値を取得
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
-    const [existing] = await db
-      .select()
-      .from(articles)
-      .where(eq(articles.slug, slug));
-    if (!existing) {
+    // 記事を削除
+    const result = await deleteArticle(slug, userId);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
-    if (existing.authorId !== userId) {
+    if (result.kind === "forbidden") {
       return c.json({ errors: { article: ["forbidden"] } }, 403);
     }
 
-    await db.delete(articles).where(eq(articles.id, existing.id));
-
+    // 削除成功
     return c.body(null, 204);
   })
   // 記事取得 GET /api/articles/:slug

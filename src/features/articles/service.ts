@@ -111,3 +111,19 @@ export async function createArticle(
     article: toArticleJson(created, author, tagList),
   };
 }
+
+// 記事削除の orchestration。
+// 戻り値は tagged union: { kind: "ok" } | { kind: "not_found" } | { kind: "forbidden" }
+export async function deleteArticle(slug: string, viewerId: number) {
+  // 記事データを shallow 取得（関連は不要、authorId だけ確認できれば良い）
+  const existing = await articleRepo.findBySlug(slug);
+  if (!existing) return { kind: "not_found" as const };
+
+  // 作者が viewer 本人か判定
+  if (existing.authorId !== viewerId) return { kind: "forbidden" as const };
+
+  // 記事を削除
+  await articleRepo.delete(existing.id);
+
+  return { kind: "ok" as const };
+}

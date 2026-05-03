@@ -3,6 +3,11 @@ import { db } from "../../db";
 import { articleTags, articles, favorites, tags } from "../../db/schema";
 
 export const articleRepo = {
+  // 関連を含まない shallow 取得。authorId 確認程度の軽い用途用
+  findBySlug(slug: string) {
+    return db.query.articles.findFirst({ where: eq(articles.slug, slug) });
+  },
+
   // 記事詳細表示に必要な author（+ followers）と articleTags（+ tag）を eager load
   findBySlugWithRelations(slug: string) {
     return db.query.articles.findFirst({
@@ -73,6 +78,11 @@ export const articleRepo = {
       .returning();
     if (!row) throw new Error("failed to create article");
     return row;
+  },
+
+  // 記事削除。articleTags / favorites など関連は ON DELETE CASCADE 任せ
+  async delete(id: number) {
+    await db.delete(articles).where(eq(articles.id, id));
   },
 
   // tags を全置換。delete → upsert（onConflictDoNothing）→ link を集約
