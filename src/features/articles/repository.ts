@@ -58,6 +58,23 @@ export const articleRepo = {
     return row;
   },
 
+  // 記事を新規作成。createdAt/updatedAt は内部で ISO 生成
+  async create(fields: {
+    slug: string;
+    title: string;
+    description: string;
+    body: string;
+    authorId: number;
+  }) {
+    const now = new Date().toISOString();
+    const [row] = await db
+      .insert(articles)
+      .values({ ...fields, createdAt: now, updatedAt: now })
+      .returning();
+    if (!row) throw new Error("failed to create article");
+    return row;
+  },
+
   // tags を全置換。delete → upsert（onConflictDoNothing）→ link を集約
   async replaceArticleTags(articleId: number, tagList: string[]) {
     await db.delete(articleTags).where(eq(articleTags.articleId, articleId));

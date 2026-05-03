@@ -26,6 +26,7 @@ import { validateJson, validateQuery } from "../../middleware/validator";
 import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
+import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
 import { getArticleBySlug, updateArticle } from "./service";
 
@@ -280,46 +281,22 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const slug = generateSlug(input.title);
       const tagList = [...new Set(input.tagList ?? [])];
 
-      // 現在時刻を取得
-      const now = new Date().toISOString();
-
       // 記事を作成
-      const [created] = await db
-        .insert(articles)
-        .values({
-          slug,
-          title: input.title,
-          description: input.description,
-          body: input.body,
-          authorId: userId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning();
-      if (!created) throw new Error("failed to create article");
+      const created = await articleRepo.create({
+        slug,
+        title: input.title,
+        description: input.description,
+        body: input.body,
+        authorId: userId,
+      });
 
       // タグを作成
       if (tagList.length > 0) {
-        await db
-          .insert(tags)
-          .values(tagList.map((name) => ({ name })))
-          .onConflictDoNothing();
-
-        const tagRows = await db
-          .select()
-          .from(tags)
-          .where(inArray(tags.name, tagList));
-
-        await db
-          .insert(articleTags)
-          .values(tagRows.map((t) => ({ articleId: created.id, tagId: t.id })));
+        await articleRepo.replaceArticleTags(created.id, tagList);
       }
 
       // 作者データを取得
-      const [author] = await db
-        .select()
-        .from(users)
-        .where(eq(users.id, userId));
+      const author = await userRepo.findById(userId);
       if (!author) throw new Error("author not found");
 
       // 記事データを返す
