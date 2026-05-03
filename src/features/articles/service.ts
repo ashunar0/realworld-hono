@@ -1,5 +1,10 @@
+import { generateSlug } from "../../lib/slug";
 import { toArticleJson } from "../../lib/article";
-import type { UpdateArticleRequest } from "../../schemas/article";
+import type {
+  CreateArticleRequest,
+  UpdateArticleRequest,
+} from "../../schemas/article";
+import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
 
 // 記事 1 件取得の orchestration。repo を 3 回呼び、presenter で組み立てて返す。
@@ -69,5 +74,40 @@ export async function updateArticle(
   return {
     kind: "ok" as const,
     article: toArticleJson(updated, existing.author, resultTagList),
+  };
+}
+
+// 記事作成の orchestration。
+// 戻り値は tagged union: { kind: "ok", article }
+// 1 variant のみだが、将来 slug_conflict 等のエラー追加の布石として pattern を揃える
+export async function createArticle(
+  viewerId: number,
+  input: CreateArticleRequest["article"],
+) {
+  // スラグ生成 + tagList の重複除去
+  const slug = generateSlug(input.title);
+  const tagList = [...new Set(input.tagList ?? [])];
+
+  // 記事を作成
+  const created = await articleRepo.create({
+    slug,
+    title: input.title,
+    description: input.description,
+    body: input.body,
+    authorId: viewerId,
+  });
+
+  // タグを作成
+  if (tagList.length > 0) {
+    await articleRepo.replaceArticleTags(created.id, tagList);
+  }
+
+  // 作者データを取得
+  const author = await userRepo.findById(viewerId);
+  if (!author) throw new Error("author not found");
+
+  return {
+    kind: "ok" as const,
+    article: toArticleJson(created, author, tagList),
   };
 }

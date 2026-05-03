@@ -23,12 +23,15 @@ import {
   type AuthVariables,
 } from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
-import { generateSlug } from "../../lib/slug";
 import { toArticleJson, toArticleListJson } from "../../lib/article";
 import comments from "./comments";
 import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
-import { getArticleBySlug, updateArticle } from "./service";
+import {
+  createArticle,
+  getArticleBySlug,
+  updateArticle,
+} from "./service";
 
 const app = new Hono<{ Variables: AuthVariables }>()
   // 記事一覧 GET /api/articles
@@ -277,33 +280,12 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const userId = c.get("userId");
       const { article: input } = c.req.valid("json");
 
-      // 記事のスラグを生成
-      const slug = generateSlug(input.title);
-      const tagList = [...new Set(input.tagList ?? [])];
-
       // 記事を作成
-      const created = await articleRepo.create({
-        slug,
-        title: input.title,
-        description: input.description,
-        body: input.body,
-        authorId: userId,
-      });
-
-      // タグを作成
-      if (tagList.length > 0) {
-        await articleRepo.replaceArticleTags(created.id, tagList);
-      }
-
-      // 作者データを取得
-      const author = await userRepo.findById(userId);
-      if (!author) throw new Error("author not found");
+      const result = await createArticle(userId, input);
 
       // 記事データを返す
       return c.json(
-        {
-          article: toArticleJson(created, author, tagList),
-        } satisfies ArticleResponse,
+        { article: result.article } satisfies ArticleResponse,
         201,
       );
     },
