@@ -1,4 +1,4 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { type SQL, and, count, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { articleTags, articles, favorites, tags } from "../../db/schema";
 
@@ -100,6 +100,53 @@ export const articleRepo = {
   // 記事削除。articleTags / favorites など関連は ON DELETE CASCADE 任せ
   async delete(id: number) {
     await db.delete(articles).where(eq(articles.id, id));
+  },
+
+  // 名前から tag を取得。存在しなければ undefined
+  findTagByName(name: string) {
+    return db.query.tags.findFirst({ where: eq(tags.name, name) });
+  },
+
+  // 指定 tag が付いてる記事の ID 一覧
+  async findArticleIdsByTagId(tagId: number) {
+    const rows = await db
+      .select({ articleId: articleTags.articleId })
+      .from(articleTags)
+      .where(eq(articleTags.tagId, tagId));
+    return rows.map((r) => r.articleId);
+  },
+
+  // 指定 user がいいねしてる記事の ID 一覧
+  async findArticleIdsFavoritedBy(userId: number) {
+    const rows = await db
+      .select({ articleId: favorites.articleId })
+      .from(favorites)
+      .where(eq(favorites.userId, userId));
+    return rows.map((r) => r.articleId);
+  },
+
+  // 記事一覧。eager load + ページング + stable sort（createdAt + id）
+  list(where: SQL | undefined, limit: number, offset: number) {
+    return db.query.articles.findMany({
+      where,
+      with: {
+        author: { with: { followers: true } },
+        articleTags: { with: { tag: true } },
+        favoritedBy: true,
+      },
+      limit,
+      offset,
+      orderBy: [desc(articles.createdAt), desc(articles.id)],
+    });
+  },
+
+  // 指定 where 句にマッチする記事の総数
+  async count(where: SQL | undefined) {
+    const [row] = await db
+      .select({ total: count() })
+      .from(articles)
+      .where(where);
+    return row?.total ?? 0;
   },
 
   // tags を全置換。delete → upsert（onConflictDoNothing）→ link を集約

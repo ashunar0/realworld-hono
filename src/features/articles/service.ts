@@ -1,7 +1,12 @@
+import { type SQL, and, eq, inArray } from "drizzle-orm";
+import { articles } from "../../db/schema";
 import { generateSlug } from "../../lib/slug";
-import { toArticleJson } from "../../lib/article";
+import { toArticleJson, toArticleListJson } from "../../lib/article";
 import type {
+  ArticlesQuery,
+  ArticlesResponse,
   CreateArticleRequest,
+  FeedQuery,
   UpdateArticleRequest,
 } from "../../schemas/article";
 import { userRepo } from "../users/repository";
@@ -11,6 +16,9 @@ import { articleRepo } from "./repository";
 type ArticleWithRelations = NonNullable<
   Awaited<ReturnType<typeof articleRepo.findBySlugWithRelations>>
 >;
+
+// articleRepo.list の要素型（favoritedBy も eager load 済み）
+type ArticleListRow = Awaited<ReturnType<typeof articleRepo.list>>[number];
 
 // favoritesCount + following を計算して toArticleJson に流す共通処理
 async function presentArticleWithViewerContext(
@@ -26,6 +34,29 @@ async function presentArticleWithViewerContext(
     article.author.followers.some((f) => f.followerId === viewerId);
 
   return toArticleJson(
+    article,
+    article.author,
+    article.articleTags.map((at) => at.tag.name),
+    favorited,
+    favoritesCount,
+    following,
+  );
+}
+
+// list 1 件用 presenter。eager load 済みの favoritedBy / followers を in-memory で集計（N+1 回避）
+function presentArticleListItem(
+  article: ArticleListRow,
+  viewerId: number | undefined,
+) {
+  const favorited =
+    viewerId !== undefined &&
+    article.favoritedBy.some((f) => f.userId === viewerId);
+  const favoritesCount = article.favoritedBy.length;
+  const following =
+    viewerId !== undefined &&
+    article.author.followers.some((f) => f.followerId === viewerId);
+
+  return toArticleListJson(
     article,
     article.author,
     article.articleTags.map((at) => at.tag.name),
@@ -175,4 +206,78 @@ export async function deleteArticle(slug: string, viewerId: number) {
   await articleRepo.delete(existing.id);
 
   return { kind: "ok" as const };
+}
+
+// 記事一覧の orchestration。
+// list 系はエラー variant 不要（filter 不一致 = 空配列で正常終了）なので tagged union 使わず、
+// ArticlesResponse 形を直返し
+export async function listArticles(
+  filter: ArticlesQuery,
+  viewerId: number | undefined,
+): Promise<ArticlesResponse> {
+  // 入力値を取得
+  const { limit, offset, author, tag, favorited } = filter;
+  const conditions: SQL[] = [];
+
+  // 作者で絞り込み
+  if (author !== undefined) {
+    const u = await userRepo.findByUsername(author);
+    if (!u) return { articles: [], articlesCount: 0 };
+    conditions.push(eq(articles.authorId, u.id));
+  }
+
+  // タグで絞り込み
+  if (tag !== undefined) {
+    const t = await articleRepo.findTagByName(tag);
+    if (!t) return { articles: [], articlesCount: 0 };
+    const articleIds = await articleRepo.findArticleIdsByTagId(t.id);
+    if (articleIds.length === 0) return { articles: [], articlesCount: 0 };
+    conditions.push(inArray(articles.id, articleIds));
+  }
+
+  // いいねしているユーザーで絞り込み
+  if (favorited !== undefined) {
+    const u = await userRepo.findByUsername(favorited);
+    if (!u) return { articles: [], articlesCount: 0 };
+    const articleIds = await articleRepo.findArticleIdsFavoritedBy(u.id);
+    if (articleIds.length === 0) return { articles: [], articlesCount: 0 };
+    conditions.push(inArray(articles.id, articleIds));
+  }
+
+  // 絞り込み条件を AND 結合
+  const where = conditions.length ? and(...conditions) : undefined;
+
+  // 記事一覧と総数を取得
+  const list = await articleRepo.list(where, limit, offset);
+  const articlesCount = await articleRepo.count(where);
+
+  // 記事データを返す
+  return {
+    articles: list.map((a) => presentArticleListItem(a, viewerId)),
+    articlesCount,
+  };
+}
+
+// 自分の feed の orchestration。フォローしてる人の記事だけを返す。
+export async function feedArticles(
+  viewerId: number,
+  filter: FeedQuery,
+): Promise<ArticlesResponse> {
+  // 入力値を取得
+  const { limit, offset } = filter;
+
+  // 自分がフォローしてる user の ID 一覧を取得
+  const followingIds = await userRepo.findFollowingIds(viewerId);
+  if (followingIds.length === 0) return { articles: [], articlesCount: 0 };
+
+  // フォローしてる人の記事だけを取得
+  const where = inArray(articles.authorId, followingIds);
+  const list = await articleRepo.list(where, limit, offset);
+  const articlesCount = await articleRepo.count(where);
+
+  // 記事データを返す
+  return {
+    articles: list.map((a) => presentArticleListItem(a, viewerId)),
+    articlesCount,
+  };
 }

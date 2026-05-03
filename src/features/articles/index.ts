@@ -1,14 +1,4 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
-import { db } from "../../db";
-import {
-  articleTags,
-  articles,
-  favorites,
-  follows,
-  tags,
-  users,
-} from "../../db/schema";
 import {
   articlesQuerySchema,
   createArticleSchema,
@@ -23,15 +13,14 @@ import {
   type AuthVariables,
 } from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
-import { toArticleListJson } from "../../lib/article";
 import comments from "./comments";
-import { userRepo } from "../users/repository";
-import { articleRepo } from "./repository";
 import {
   createArticle,
   deleteArticle,
   favoriteArticle,
+  feedArticles,
   getArticleBySlug,
+  listArticles,
   unfavoriteArticle,
   updateArticle,
 } from "./service";
@@ -43,116 +32,15 @@ const app = new Hono<{ Variables: AuthVariables }>()
     optionalAuthMiddleware,
     validateQuery(articlesQuerySchema),
     async (c) => {
-      const { limit, offset, author, tag, favorited } = c.req.valid("query");
+      // 入力値を取得
+      const filter = c.req.valid("query");
       const userId = c.get("userId");
 
-      const conditions = [];
-      if (author !== undefined) {
-        const [u] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.username, author));
-        if (!u) {
-          return c.json({
-            articles: [],
-            articlesCount: 0,
-          } satisfies ArticlesResponse);
-        }
-        conditions.push(eq(articles.authorId, u.id));
-      }
+      // 記事一覧を取得
+      const result = await listArticles(filter, userId);
 
-      if (tag !== undefined) {
-        const [t] = await db
-          .select({ id: tags.id })
-          .from(tags)
-          .where(eq(tags.name, tag));
-        if (!t) {
-          return c.json({
-            articles: [],
-            articlesCount: 0,
-          } satisfies ArticlesResponse);
-        }
-        const ats = await db
-          .select({ articleId: articleTags.articleId })
-          .from(articleTags)
-          .where(eq(articleTags.tagId, t.id));
-        if (ats.length === 0) {
-          return c.json({
-            articles: [],
-            articlesCount: 0,
-          } satisfies ArticlesResponse);
-        }
-        conditions.push(
-          inArray(
-            articles.id,
-            ats.map((at) => at.articleId),
-          ),
-        );
-      }
-
-      if (favorited !== undefined) {
-        const [u] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.username, favorited));
-        if (!u) {
-          return c.json({
-            articles: [],
-            articlesCount: 0,
-          } satisfies ArticlesResponse);
-        }
-        const favs = await db
-          .select({ articleId: favorites.articleId })
-          .from(favorites)
-          .where(eq(favorites.userId, u.id));
-        if (favs.length === 0) {
-          return c.json({
-            articles: [],
-            articlesCount: 0,
-          } satisfies ArticlesResponse);
-        }
-        conditions.push(
-          inArray(
-            articles.id,
-            favs.map((f) => f.articleId),
-          ),
-        );
-      }
-
-      const whereClause = conditions.length ? and(...conditions) : undefined;
-
-      const list = await db.query.articles.findMany({
-        where: whereClause,
-        with: {
-          author: { with: { followers: true } },
-          articleTags: { with: { tag: true } },
-          favoritedBy: true,
-        },
-        limit,
-        offset,
-        orderBy: [desc(articles.createdAt), desc(articles.id)],
-      });
-
-      const [totalRow] = await db
-        .select({ total: count() })
-        .from(articles)
-        .where(whereClause);
-
-      return c.json({
-        articles: list.map((a) =>
-          toArticleListJson(
-            a,
-            a.author,
-            a.articleTags.map((at) => at.tag.name),
-            userId !== undefined &&
-              a.favoritedBy.some((f) => f.userId === userId),
-            a.favoritedBy.length,
-            userId !== undefined &&
-              a.author.followers.some((f) => f.followerId === userId),
-          ),
-        ),
-        articlesCount: totalRow?.total ?? 0,
-      } satisfies ArticlesResponse);
+      // 記事データを返す
+      return c.json(result satisfies ArticlesResponse);
     },
   )
   // 自分の feed GET /api/articles/feed
@@ -161,53 +49,15 @@ const app = new Hono<{ Variables: AuthVariables }>()
     authMiddleware,
     validateQuery(feedQuerySchema),
     async (c) => {
+      // 入力値を取得
       const userId = c.get("userId");
-      const { limit, offset } = c.req.valid("query");
+      const filter = c.req.valid("query");
 
-      const followingRows = await db
-        .select({ id: follows.followingId })
-        .from(follows)
-        .where(eq(follows.followerId, userId));
+      // 自分の feed を取得
+      const result = await feedArticles(userId, filter);
 
-      if (followingRows.length === 0) {
-        return c.json({
-          articles: [],
-          articlesCount: 0,
-        } satisfies ArticlesResponse);
-      }
-
-      const followingIds = followingRows.map((r) => r.id);
-
-      const list = await db.query.articles.findMany({
-        where: inArray(articles.authorId, followingIds),
-        with: {
-          author: { with: { followers: true } },
-          articleTags: { with: { tag: true } },
-          favoritedBy: true,
-        },
-        limit,
-        offset,
-        orderBy: [desc(articles.createdAt), desc(articles.id)],
-      });
-
-      const [totalRow] = await db
-        .select({ total: count() })
-        .from(articles)
-        .where(inArray(articles.authorId, followingIds));
-
-      return c.json({
-        articles: list.map((a) =>
-          toArticleListJson(
-            a,
-            a.author,
-            a.articleTags.map((at) => at.tag.name),
-            a.favoritedBy.some((f) => f.userId === userId),
-            a.favoritedBy.length,
-            true,
-          ),
-        ),
-        articlesCount: totalRow?.total ?? 0,
-      } satisfies ArticlesResponse);
+      // 記事データを返す
+      return c.json(result satisfies ArticlesResponse);
     },
   )
   // 記事更新 PUT /api/articles/:slug
@@ -287,10 +137,7 @@ const app = new Hono<{ Variables: AuthVariables }>()
       const result = await createArticle(userId, input);
 
       // 記事データを返す
-      return c.json(
-        { article: result.article } satisfies ArticleResponse,
-        201,
-      );
+      return c.json({ article: result.article } satisfies ArticleResponse, 201);
     },
   )
   // 記事 favorite POST /api/articles/:slug/favorite
