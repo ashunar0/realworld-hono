@@ -7,7 +7,35 @@ import type {
 import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
 
-// 記事 1 件取得の orchestration。repo を 3 回呼び、presenter で組み立てて返す。
+// findBySlugWithRelations の戻り値から undefined を取り除いた型
+type ArticleWithRelations = NonNullable<
+  Awaited<ReturnType<typeof articleRepo.findBySlugWithRelations>>
+>;
+
+// favoritesCount + following を計算して toArticleJson に流す共通処理
+async function presentArticleWithViewerContext(
+  article: ArticleWithRelations,
+  viewerId: number | undefined,
+  favorited: boolean,
+) {
+  // いいね数を取得
+  const favoritesCount = await articleRepo.countFavorites(article.id);
+  // 自身がフォローしているかを判定
+  const following =
+    viewerId !== undefined &&
+    article.author.followers.some((f) => f.followerId === viewerId);
+
+  return toArticleJson(
+    article,
+    article.author,
+    article.articleTags.map((at) => at.tag.name),
+    favorited,
+    favoritesCount,
+    following,
+  );
+}
+
+// 記事 1 件取得の orchestration。
 // 戻り値は tagged union: { kind: "ok", article } | { kind: "not_found" }
 export async function getArticleBySlug(
   slug: string,
@@ -17,29 +45,18 @@ export async function getArticleBySlug(
   const article = await articleRepo.findBySlugWithRelations(slug);
   if (!article) return { kind: "not_found" as const };
 
-  // 記事のいいね数を取得
-  const favoritesCount = await articleRepo.countFavorites(article.id);
-
   // 自身がいいねしているかを判定（ログイン中のみ DB 確認）
   const favorited =
     viewerId !== undefined
       ? await articleRepo.isFavoritedBy(article.id, viewerId)
       : false;
 
-  // 自身がフォローしているかを判定
-  const following =
-    viewerId !== undefined &&
-    article.author.followers.some((f) => f.followerId === viewerId);
-
   return {
     kind: "ok" as const,
-    article: toArticleJson(
+    article: await presentArticleWithViewerContext(
       article,
-      article.author,
-      article.articleTags.map((at) => at.tag.name),
+      viewerId,
       favorited,
-      favoritesCount,
-      following,
     ),
   };
 }
@@ -109,6 +126,38 @@ export async function createArticle(
   return {
     kind: "ok" as const,
     article: toArticleJson(created, author, tagList),
+  };
+}
+
+// 記事 favorite の orchestration。
+// 戻り値は tagged union: { kind: "ok", article } | { kind: "not_found" }
+export async function favoriteArticle(slug: string, viewerId: number) {
+  // 記事データを取得
+  const article = await articleRepo.findBySlugWithRelations(slug);
+  if (!article) return { kind: "not_found" as const };
+
+  // いいねを追加
+  await articleRepo.favorite(article.id, viewerId);
+
+  return {
+    kind: "ok" as const,
+    article: await presentArticleWithViewerContext(article, viewerId, true),
+  };
+}
+
+// 記事 unfavorite の orchestration。
+// 戻り値は tagged union: { kind: "ok", article } | { kind: "not_found" }
+export async function unfavoriteArticle(slug: string, viewerId: number) {
+  // 記事データを取得
+  const article = await articleRepo.findBySlugWithRelations(slug);
+  if (!article) return { kind: "not_found" as const };
+
+  // いいねを解除
+  await articleRepo.unfavorite(article.id, viewerId);
+
+  return {
+    kind: "ok" as const,
+    article: await presentArticleWithViewerContext(article, viewerId, false),
   };
 }
 

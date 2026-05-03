@@ -28,6 +28,23 @@ export const articleRepo = {
     return row?.total ?? 0;
   },
 
+  // 記事を favorite。重複は無視
+  async favorite(articleId: number, userId: number) {
+    await db
+      .insert(favorites)
+      .values({ userId, articleId })
+      .onConflictDoNothing();
+  },
+
+  // 記事の favorite を解除
+  async unfavorite(articleId: number, userId: number) {
+    await db
+      .delete(favorites)
+      .where(
+        and(eq(favorites.userId, userId), eq(favorites.articleId, articleId)),
+      );
+  },
+
   // 指定 user が指定記事を favorite してるか。boolean に潰す
   async isFavoritedBy(articleId: number, userId: number) {
     const [row] = await db

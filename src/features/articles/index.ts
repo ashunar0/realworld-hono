@@ -23,14 +23,16 @@ import {
   type AuthVariables,
 } from "../../middleware/auth";
 import { validateJson, validateQuery } from "../../middleware/validator";
-import { toArticleJson, toArticleListJson } from "../../lib/article";
+import { toArticleListJson } from "../../lib/article";
 import comments from "./comments";
 import { userRepo } from "../users/repository";
 import { articleRepo } from "./repository";
 import {
   createArticle,
   deleteArticle,
+  favoriteArticle,
   getArticleBySlug,
+  unfavoriteArticle,
   updateArticle,
 } from "./service";
 
@@ -297,35 +299,16 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
-    // 記事データを取得
-    const article = await articleRepo.findBySlugWithRelations(slug);
-    if (!article) {
+    // いいねを追加
+    const result = await favoriteArticle(slug, userId);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    // 記事をいいねする
-    await db
-      .insert(favorites)
-      .values({ userId, articleId: article.id })
-      .onConflictDoNothing();
-
-    // 記事のいいね数を取得
-    const [countRow] = await db
-      .select({ total: count() })
-      .from(favorites)
-      .where(eq(favorites.articleId, article.id));
-
     // 記事データを返す
-    return c.json({
-      article: toArticleJson(
-        article,
-        article.author,
-        article.articleTags.map((at) => at.tag.name),
-        true,
-        countRow?.total ?? 0,
-        article.author.followers.some((f) => f.followerId === userId),
-      ),
-    } satisfies ArticleResponse);
+    return c.json({ article: result.article } satisfies ArticleResponse);
   })
   // 記事 favorite 解除 DELETE /api/articles/:slug/favorite
   .delete("/articles/:slug/favorite", authMiddleware, async (c) => {
@@ -333,36 +316,16 @@ const app = new Hono<{ Variables: AuthVariables }>()
     const userId = c.get("userId");
     const slug = c.req.param("slug");
 
-    // 記事データを取得
-    const article = await articleRepo.findBySlugWithRelations(slug);
-    if (!article) {
+    // いいねを解除
+    const result = await unfavoriteArticle(slug, userId);
+
+    // 各エラーケースに status code をマッピング
+    if (result.kind === "not_found") {
       return c.json({ errors: { article: ["not found"] } }, 404);
     }
 
-    // 記事のいいねを解除
-    await db
-      .delete(favorites)
-      .where(
-        and(eq(favorites.userId, userId), eq(favorites.articleId, article.id)),
-      );
-
-    // 記事のいいね数を取得
-    const [countRow] = await db
-      .select({ total: count() })
-      .from(favorites)
-      .where(eq(favorites.articleId, article.id));
-
     // 記事データを返す
-    return c.json({
-      article: toArticleJson(
-        article,
-        article.author,
-        article.articleTags.map((at) => at.tag.name),
-        false,
-        countRow?.total ?? 0,
-        article.author.followers.some((f) => f.followerId === userId),
-      ),
-    } satisfies ArticleResponse);
+    return c.json({ article: result.article } satisfies ArticleResponse);
   })
   // コメント sub-app をネストマウント（prefix は子の basePath 側で持つ）
   .route("/", comments);
