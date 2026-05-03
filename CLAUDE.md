@@ -31,32 +31,37 @@
 ```
 src/
 ├── index.ts                    ← トップ。chain で sub-app 統合、AppType export
-├── features/
-│   ├── users/
-│   │   ├── index.ts            ← signup / login / GET PUT /user（まだ 4 層分離してない）
-│   │   └── repository.ts       ← userRepo: findById / findByUsername / findFollowingIds（articles の refactor で新設）
-│   ├── articles/               ← ★ Step 12-A で 4 層分離完了
+├── features/                   ← ★ Step 12-B で全 feature 4 層分離完了
+│   ├── articles/
 │   │   ├── index.ts            ← route 層（thin、c の入出力 + service 呼び出し + status code mapping のみ）
 │   │   ├── service.ts          ← orchestration 層（c も db も触らない、tagged union で error variant 表現）
 │   │   ├── repository.ts       ← data access 層（articleRepo: 全 DB 操作集約）
+│   │   ├── presenter.ts        ← toArticleJson / toArticleListJson（Step 12-B で lib から移動）
+│   │   ├── slug.ts             ← generateSlug（Step 12-B で lib から移動）
 │   │   └── comments/
-│   │       └── index.ts        ← Comments（basePath で :slug 集約）。まだ 4 層分離してない
+│   │       ├── index.ts        ← route 層（basePath で :slug 集約）
+│   │       ├── service.ts      ← createComment / listComments / deleteComment
+│   │       ├── repository.ts   ← commentRepo: create / listByArticleId / findById / delete
+│   │       └── presenter.ts    ← toCommentJson（Step 12-B で lib から移動）
+│   ├── profiles/
+│   │   ├── index.ts            ← route 層（basePath で /profiles/:username 集約）
+│   │   └── service.ts          ← getProfile / followUser / unfollowUser（DB 操作は userRepo に依存）
 │   ├── tags/
-│   │   └── index.ts            ← GET /api/tags
-│   └── profiles/
-│       └── index.ts            ← GET /:username + POST/DELETE /:username/follow。まだ 4 層分離してない
+│   │   └── index.ts            ← GET /api/tags（小規模なので分離せず）
+│   └── users/
+│       ├── index.ts            ← route 層（signup / login / GET PUT /user）
+│       ├── service.ts          ← signupUser / loginUser / getCurrentUser / updateUser
+│       ├── repository.ts       ← userRepo: 全 user / follows DB 操作（feature 越境利用あり）
+│       └── presenter.ts        ← toAuthUserJson（Step 12-B で lib から移動）
 ├── db/
 │   ├── index.ts                ← drizzle wrapper
 │   └── schema.ts               ← users / articles / comments / tags / article_tags / favorites / follows + relations
 ├── middleware/
 │   ├── auth.ts                 ← authMiddleware（必須）/ optionalAuthMiddleware（任意）+ c.set("userId")
 │   └── validator.ts            ← validateJson / validateQuery
-├── lib/                        ← presenter 層（feature 横断 share）
-│   ├── slug.ts                 ← title -> slug
-│   ├── article.ts              ← toArticleJson(article, author, tagList?, favorited?, favoritesCount?, following?)
-│   ├── author.ts               ← toAuthorJson(user, following) ← profile / article.author で共通
-│   ├── comment.ts              ← toCommentJson(comment, author)
-│   └── jwt.ts                  ← signToken
+├── lib/                        ← 真の共有 helper のみ（feature 横断で実際に使われるもの）
+│   ├── author.ts               ← toAuthorJson + isFollowing。articles + profiles の両方が使う真の共有
+│   └── jwt.ts                  ← signToken。⚠️ middleware/auth.ts と JWT_SECRET 重複、auth レイヤー統合 task あり
 └── schemas/
     ├── user.ts                 ← zod + types
     ├── article.ts              ← zod + types（articlesQuerySchema / feedQuerySchema 含む）
@@ -95,7 +100,76 @@ bun run db:migrate   # migration を DB に当てる
 | 10-A | **spec 細部の精度上げ**（A-1 self-follow 禁止 [DB CHECK + handler 422] / A-3 signup/PUT 重複検知 + 空白 trim） | ✅ |
 | 11-B | **Bruno collection で spec 100% 準拠**（149/149 緑） | ✅ |
 | 12-A | **articles feature の 4 層分離**（route / service / repository / presenter）8 endpoint × 10 commits、`articles/index.ts` 484 → 180 行、Bruno 149/149 緑維持。userRepo も新設（feature 越境の作法確立） | ✅ |
-| **次** | **同 pattern を comments / profiles / users feature に展開**（articles を reference として機械的に当てる） | ⏳ |
+| 12-B | **comments / profiles / users feature の 4 層分離 + lib 再配置**（8 commits）。`isFollowing` helper 抽出（articles/profiles 共有）、`toAuthUserJson` presenter 新設、handler 行数: profiles 95→67 / comments 114→76 / users 179→93。`lib/{article,comment,slug,user}.ts` を feature 配下へ移動、`lib/{author,jwt}.ts` のみ残す。Bruno 149/149 緑維持 | ✅ |
+| **次** | **auth レイヤー統合（lib/jwt.ts と middleware/auth.ts の secret 重複解消）or bun test 導入** | ⏳ |
+
+## Step 12-B で身についたこと（直近サマリ）
+
+### 型紙の "適用フェーズ" は速い
+
+- articles は型紙確立フェーズで 10 commits 細刻みだったが、profiles / comments / users は型紙適用フェーズなので **endpoint 単位 or feature 単位の粗い刻みで OK**
+- profiles 3 commits / comments 1 commit / users 2 commits / lib 再配置 1 commit + chore 1 commit = **計 8 commits で 3 feature 完遂**
+- ★ 教訓：「型紙確立 = 細刻み」「型紙適用 = 粗刻み」と意識的に切り替える。同じ流儀を続ける必要はない
+
+### `lib/` の判断基準（実証）
+
+| 状態 | 配置 |
+|---|---|
+| 1 feature でしか使わない | feature 配下（`features/X/presenter.ts` 等） |
+| 2+ feature で **直接** import される真の共有 | `lib/` に残す |
+| 1 feature が直接 import + 別 feature の lib が間接的に呼ぶ | **真の共有**（`lib/author.ts` が articles の presenter から内部 reuse される例） |
+
+- profiles refactor の途中で「lib/* の中身は本当に共有されてるか」を `grep -rn "from.*lib/X"` で実測 → `author.ts` 以外は全部 single feature だった
+- **CLAUDE.md の「lib = feature 横断 share」コメントが現実とズレてた → 移動の根拠**
+- 全 feature が 4 層化された **後** に判断するのがクリア（途中だと "真の共有" 判定が早すぎる）
+
+### Profile vs User resource の分離
+
+- 同じ `users` テーブル row でも、**API 上は別 resource** として表現する
+- `toAuthorJson(author, following)` → `Profile` shape: `{ username, bio, image, following }`（**viewer から見た他人**、`email` / `token` なし）
+- `toAuthUserJson(user, token)` → `User` shape: `{ email, token, username, bio, image }`（**認証された自分自身**、`following` なし）
+- 用途: `toAuthorJson` は article.author / comment.author / GET `/profiles/:username`、`toAuthUserJson` は signup / login / GET `/user` / PUT `/user`
+- ★ 教訓：DB の物理 row と API の論理 resource は別レイヤー。同じ row でも見る相手によって違う shape を作る
+
+### `isFollowing` helper の eager-load 流儀
+
+- `viewerId !== undefined && user.followers.some((f) => f.followerId === viewerId)` が articles の `presentArticleWithViewerContext` / `presentArticleListItem` / profiles の `getProfile` で 3 回登場 → rule of 3 で `lib/author.ts` に抽出
+- **eager-load パターン** が前提：`with: { followers: true }`（or `author: { with: { followers: true } }`）で取った後、in-memory `.some(...)` で判定。N+1 回避
+- `userRepo` には `findByUsernameWithFollowers` のように "用途別に別メソッド" を切る（articles の `findBySlug` / `findBySlugWithRelations` 流儀と同じ）
+- POST /follow / DELETE /follow では follow 状態が **自明** (`true` / `false`)、isFollowing 不要。boolean 単発確認メソッド (`isFollowedBy` の親戚) は今のところ要らなかった
+
+### feature 越境の "登場頻度"
+
+- articles の service が `userRepo.findById` を呼ぶ
+- comments の service が `articleRepo.findBySlug` + `userRepo.findById` を呼ぶ
+- profiles の service が **userRepo だけ** 呼ぶ（自分の repo を持たない、user feature の薄い view として割り切り）
+- **「データの所有者と repo を揃える」 + 「越境は service 層で吸収」** が一貫したルール
+- profile 用 `profileRepo` を作らないのは: follow 操作の返却値が user ドメイン由来（target user object）なので user feature に属するのが自然、という論拠
+
+### handler の最小形は 5 つの仕事（再確認）
+
+1. middleware chain
+2. 入力を `c` から取り出す
+3. service を呼ぶ
+4. tagged union → HTTP status マッピング
+5. `c.json` で包む
+
+- これ以下に削ると Hono 公式 NG の controller 化に踏み込む
+- 4 feature 全部でこの形に揃った → reference として読みやすい
+
+### `lib/jwt.ts` ↔ `middleware/auth.ts` の secret 重複（次の宿題）
+
+- `lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) が **同じ `Bun.env.JWT_SECRET ?? "dev-fallback"` を 2 箇所に重複**
+- `lib/jwt.ts` は users feature 専用じゃなく **auth ドメイン**の概念
+- 統合案: `auth/` ディレクトリを切って sign / verify / middleware を 1 箇所に集約。または `middleware/auth.ts` 内に統合
+- ★ 次回 task：「auth レイヤー統合」で扱う
+
+### 既知のスタイル（再確認）
+
+- handler / service の各処理ブロックに **phase コメント**（`// 入力値を取得` `// XX を判定` 等）。inline 引数渡しに切り詰めない（あさひスタイル）
+- service の戻り値は `{ kind: "ok" as const, ... }` で discriminated union
+- repository は `<feature>Repo` で object literal export
+- 単一 feature でしか使わない helper は **service.ts に inline 化** が妥当（generateSlug は独立 file 維持を選択 = あさひの判断、slot 命名一貫優先）
 
 ## Step 12-A で身についたこと（直近サマリ）
 
@@ -219,18 +293,18 @@ handler に残るのは 5 つの仕事のみ（これ以上削ると Hono 公式
 - **`ne(users.id, userId)` で「自分以外」を除外**：PUT /user で自分の email/username を維持する場合に誤検知しないため。
 - **password には `.trim()` を入れない**：エントロピー保持のため。ユーザーが意図したスペース付き password を尊重（NIST 800-63B が passphrase 推奨）。identifier（email/username）と content（title/body）は trim する。
 
-## 次の方向（Step 12-A 後）
+## 次の方向（Step 12-B 後）
 
-articles が完成形 reference になった。直近の候補：
+全 feature 4 層分離 + lib 再配置 完了。直近の候補：
 
 | 案 | 内容 | コメント |
 |---|---|---|
-| **★ 次の優先** | **comments / profiles / users feature を articles と同じ 4 層に揃える** | articles で型紙確立済み、機械的な当てはめ。3 feature × 数 endpoint。次回 session の本命 |
-| C | bun test で internal unit test | service / repository が pure になったので test しやすい状態に進化済み |
+| **★ 次の優先候補** | **auth レイヤー統合**：`lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) で `Bun.env.JWT_SECRET` を 2 箇所に重複 → `auth/` ディレクトリに集約 or middleware 内統合 | Step 12-B で発見した宿題。小〜中規模 |
+| **★ 次の優先候補** | **bun test で internal unit test** | service / repository が pure になったので test しやすい。tagged union variant ごとのケースを 1 endpoint 試して感触確認 |
 | D | frontend integration | 親リポの frontend と E2E |
 | F | 別 FW で書き直し（比較） | layered なので比較しやすい |
 | G | 比較メトリクス計測（行数、起動時間、bundle size、応答時間） | 比較プロジェクト追加前に |
-| 微調整 | `kind → status` の helper 化、`factory.createHandlers` で middleware DRY、`hc<AppType>` で frontend 用 client | 旨味少、後回し |
+| 微調整 | `kind → status` の helper 化（4 endpoint で `if (result.kind === ...)` 繰り返し）、`factory.createHandlers` で middleware DRY、`hc<AppType>` で frontend 用 client | 旨味少、後回し |
 
 ## コーディング規約・確立済み pattern
 
@@ -286,7 +360,7 @@ RealWorld spec 形式（**field-keyed**、Step 11-B で確定）：
 ### refactor
 
 - **rule of 3**：3回目の重複で抽出
-- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toArticleListJson / toAuthorJson / toCommentJson / generateSlug / signToken / normalizeNullable（users handler 内）
+- 抽出済み: validateJson / validateQuery / authMiddleware / optionalAuthMiddleware / toArticleJson / toArticleListJson / toAuthorJson / **isFollowing**（Step 12-B）/ toCommentJson / **toAuthUserJson**（Step 12-B）/ generateSlug / signToken / normalizeNullable（users service 内、Step 12-B で handler から移管）
 
 ### chain pattern（Step 6.5 で全層適用済み）
 
@@ -312,32 +386,35 @@ RealWorld spec 形式（**field-keyed**、Step 11-B で確定）：
 
 ## 次回 Claude セッションへの指示
 
-1. このファイルを最初に読む（特に **「Step 12-A で身についたこと」** が今後の作業の reference）
-2. `git log --oneline -15` で commit history 把握。Step 12-A の refactor commit が 10 個並ぶ：
+1. このファイルを最初に読む（特に **「Step 12-B で身についたこと」** + **「Step 12-A で身についたこと」** が今後の作業の reference）
+2. `git log --oneline -15` で commit history 把握。Step 12-B の refactor commit が 8 個並ぶ：
    ```
-   1689bdf refactor: GET /articles + /feed を 3 層分離
-   41c446a refactor: favorite ペアを 3 層分離 + presentArticleWithViewerContext を helper 化
-   982d985 refactor: DELETE /:slug を 3 層分離
-   4f9aed3 refactor: POST /articles を service 層 (createArticle) に切り出し
-   12fcd59 refactor: POST /articles の DB 操作を repository に集約
-   6d111b0 refactor: PUT /:slug を service 層 (updateArticle) に切り出し
-   dcc6e78 refactor: PUT /:slug の DB 操作を articleRepo に集約
-   e361ec1 refactor: GET /:slug を service 層 (getArticleBySlug) に切り出し
-   e30a07a refactor: PUT/POST favorite/DELETE favorite でも articleRepo を共有
-   ec1eb6d refactor: articles の :slug handler の DB 操作を repository 層に抽出
+   b93b3e4 refactor: lib presenter / slug を feature 配下に再配置
+   8662b24 refactor: GET /user + PUT /user を 3 層分離
+   6a5762d refactor: signup + login を 3 層分離
+   d5accd6 refactor: comments を 3 層分離（POST/GET/DELETE）
+   4f56bdd chore: profiles / users handler に phase コメントを追加
+   c2a0af9 refactor: POST/DELETE /profiles/:username/follow を 3 層分離
+   0017ce1 refactor: GET /profiles/:username を 3 層分離
+   964ef00 refactor: isFollowing helper を lib/author に抽出
    ```
-3. ユーザーは **comments / profiles / users feature を articles と同じ 4 層に揃える** 状態で来るはず（次の優先タスク）。articles を完成形 reference として参照
-4. 新 feature の refactor 流れ（articles で確立した型紙）：
+3. **全 4 feature が 4 層分離済み + lib 再配置済み**の完成状態で来るはず。articles に加え、profiles / comments / users も reference として読める
+4. 次の優先候補は 2 つ（あさひに選ばせる、または明示の指示を待つ）：
+   - **A. auth レイヤー統合**: `lib/jwt.ts` (`signToken`) と `middleware/auth.ts` (`verify`) で `Bun.env.JWT_SECRET` を 2 箇所重複 → `auth/` ディレクトリに統合 or middleware 内統合
+   - **B. bun test 導入**: service / repository が pure になったので unit test しやすい。tagged union variant の網羅から始めると効果的
+5. 新 feature を将来追加する時の refactor 流れ（articles / Step 12-B で確立済み）：
    - **Stage A: repository に DB 操作を集約**（feature 内に `repository.ts` を新設、必要なら別 feature の repo を import）
    - **Stage B: service に orchestration を集約**（feature 内に `service.ts`、tagged union で error variant 表現、list 系は直返し）
    - **Stage C: handler を route 層だけに削る + 不要 import を cleanup → Bruno → commit**
+   - presenter は **その feature でしか使わなければ feature 配下** (`features/X/presenter.ts`)、**真の共有なら `lib/`** に置く（lib 配置の判断基準は Step 12-B サマリ参照）
+   - 型紙適用フェーズなので、**endpoint 単位 or feature 単位の粗い刻みで OK**（articles の細刻みに引きずられない）
    - 毎 stage で `bunx tsc --noEmit` + Bruno (149/149) verify
-5. **「handler は最終形」**: 5 つの仕事（middleware chain / 入力取り出し / service 呼び出し / kind→status mapping / c.json）以下に削らない。controller 化は Hono 公式 NG
-6. **既存パターン（articles 以外も既に確立）**：chain + basePath、eager load、optional / required auth、relationName、`toAuthorJson` / `toArticleJson` / `toArticleListJson` / `toCommentJson`、CHECK 制約は column 名直書き、重複検知は事前 SELECT、error は field-keyed、datetime ISO 化、orderBy stable
-7. **spec 準拠検証は Bruno**：`cd ~/dev/sample/real-world/specs/bruno && bru run --env local`（dev server 起動済みで）。149/149 緑が現状値、回帰検出に毎回走らせて良い
-8. dev server は `bun run --hot src/index.ts` で起動。**構造変更（route 追加 / sub-app 追加）や lib の transform 変更後は --hot だと反映漏れがあるので再起動推奨**
-9. このプロジェクトは **コーチモードがデフォルト**（明示されなくても closed question + 段階的に進める。memory 参照）
-10. **handler / service の phase コメント保持**：あさひスタイルとして必須、勝手に削らない（memory 参照）
+6. **「handler は最終形」**: 5 つの仕事（middleware chain / 入力取り出し / service 呼び出し / kind→status mapping / c.json）以下に削らない。controller 化は Hono 公式 NG
+7. **既存パターン**：chain + basePath、eager load、optional / required auth、relationName、`toAuthorJson` / `isFollowing` / `toArticleJson` / `toArticleListJson` / `toCommentJson` / `toAuthUserJson`、CHECK 制約は column 名直書き、重複検知は事前 SELECT、error は field-keyed、datetime ISO 化、orderBy stable
+8. **spec 準拠検証は Bruno**：`cd ~/dev/sample/real-world/specs/bruno && bru run --env local`（dev server 起動済みで）。149/149 緑が現状値、回帰検出に毎回走らせて良い
+9. dev server は `bun run --hot src/index.ts` で起動。**構造変更（route 追加 / sub-app 追加）や lib の transform 変更後は --hot だと反映漏れがあるので再起動推奨**
+10. このプロジェクトは **コーチモードがデフォルト**（明示されなくても closed question + 段階的に進める。memory 参照）
+11. **handler / service の phase コメント保持**：あさひスタイルとして必須、勝手に削らない（memory 参照）
 
 ---
 
